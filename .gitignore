@@ -1,0 +1,30 @@
+# Keil build output
+MDK-ARM/STM32G431CBT6_test/
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+
+# Keil user/session files
+*.uvguix.*
+*.uvgui.*
+*.uvguix
+*.uvgui
+
+# Build artifacts
+*.o
+*.d
+*.crf
+*.lst
+*.map
+*.axf
+*.hex
+*.bin
+*.elf
+*.htm
+*.lnp
+*.dep
+
+# Temporary files
+*.bak
+*.tmp
+*.log
+Thumbs.db
