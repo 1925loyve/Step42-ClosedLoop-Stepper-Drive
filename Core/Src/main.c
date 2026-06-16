@@ -93,6 +93,7 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
+static void Motor_EnableOutput(void);
 
 /* USER CODE END PFP */
 
@@ -297,6 +298,53 @@ static void Debug_SendPID(void)
   Debug_SendBytes((uint8_t *)msg, len);
 }
 
+static void Debug_SendAngle(float angle, float move_delta)
+{
+  char msg[80];
+  uint8_t len = 0;
+
+  len = Debug_AppendText(msg, len, "ANGLE ");
+  len = Debug_AppendFloat3(msg, len, angle);
+  len = Debug_AppendChar(msg, len, ' ');
+  len = Debug_AppendFloat3(msg, len, move_delta);
+  len = Debug_AppendText(msg, len, "\r\n");
+
+  Debug_SendBytes((uint8_t *)msg, len);
+}
+
+static void Debug_SendError(const char *error)
+{
+  char msg[64];
+  uint8_t len = 0;
+
+  len = Debug_AppendText(msg, len, "ERR ");
+  len = Debug_AppendText(msg, len, error);
+  len = Debug_AppendText(msg, len, "\r\n");
+
+  Debug_SendBytes((uint8_t *)msg, len);
+}
+
+static void Move_ToAbsoluteAngle(float target_angle)
+{
+  float move_delta;
+
+  move_delta = PID_AngleErrorDeg(target_angle, mt6701_angle_deg);
+
+  if (motor_user_enabled == 0U)
+  {
+    Motor_EnableOutput();
+    motor_user_enabled = 1U;
+    led_red_on;
+  }
+
+  weak_pid_target_deg = mt6701_unwrapped_deg + move_delta;
+  PID_Reset(&weak_pid);
+  weak_pid_enable = 1U;
+  led_white_on;
+
+  Debug_SendAngle(target_angle, move_delta);
+}
+
 static void Debug_ProcessLine(char *line)
 {
   char *cursor;
@@ -309,6 +357,27 @@ static void Debug_ProcessLine(char *line)
   if (strcmp(line, "PID?") == 0)
   {
     Debug_SendPID();
+    return;
+  }
+
+  if (strncmp(line, "ANGLE ", 6) == 0)
+  {
+    float target_angle;
+
+    cursor = line + 6;
+    target_angle = strtof(cursor, &cursor);
+    if ((target_angle < 0.0f) || (target_angle > 360.0f))
+    {
+      Debug_SendError("ANGLE_RANGE");
+      return;
+    }
+
+    if (target_angle >= 360.0f)
+    {
+      target_angle = 0.0f;
+    }
+
+    Move_ToAbsoluteAngle(target_angle);
     return;
   }
 
