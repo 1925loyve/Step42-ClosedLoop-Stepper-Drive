@@ -80,6 +80,8 @@ static volatile uint8_t debug_line_ready = 0;
 static volatile uint8_t debug_tx_busy = 0;
 static volatile uint32_t debug_tx_pause_until_ms = 0;
 static volatile uint32_t debug_raw_last_tx_ms = 0;
+static volatile uint32_t debug_rx_count = 0;
+static uint32_t debug_rx_count_last_tx_ms = 0;
 static uint8_t motor_user_enabled = 0;
 /* USER CODE END PV */
 
@@ -326,6 +328,29 @@ static void Debug_SendEnable(void)
   Debug_SendBytes((uint8_t *)msg, len);
 }
 
+static void Debug_SendRxCount(void)
+{
+  char msg[24];
+  uint8_t len = 0;
+
+  len = Debug_AppendText(msg, len, "RXCNT ");
+  len = Debug_AppendUint(msg, len, debug_rx_count);
+  len = Debug_AppendText(msg, len, "\r\n");
+
+  Debug_SendBytes((uint8_t *)msg, len);
+}
+
+static void Debug_RxCountTask(void)
+{
+  uint32_t now = HAL_GetTick();
+
+  if ((uint32_t)(now - debug_rx_count_last_tx_ms) >= 1000UL)
+  {
+    debug_rx_count_last_tx_ms = now;
+    Debug_SendRxCount();
+  }
+}
+
 static void Debug_SendError(const char *error)
 {
   char msg[64];
@@ -462,6 +487,8 @@ static void Debug_ProcessLine(char *line)
 
 static void Debug_ProcessRxByte(uint8_t ch)
 {
+  debug_rx_count++;
+
   if ((ch == '\r') || (ch == '\n'))
   {
     if ((debug_rx_len > 0U) && (debug_line_ready == 0U))
@@ -595,6 +622,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     Debug_ProcessRx();
+    Debug_RxCountTask();
 
     int8_t key_flag = Key_Scan();
     switch (key_flag)
