@@ -41,6 +41,8 @@ Stepper_t Motor_42;
 /* USER CODE BEGIN PD */
 #define WEAK_PID_OUTPUT_SIGN (1.0f)
 #define DEBUG_RX_BUF_SIZE (64U)
+#define MOTOR_HEAT_MAX_ENABLE_MS (120000UL)
+#define MOTOR_HEAT_COOLDOWN_MS (30000UL)
 
 /* USER CODE END PD */
 
@@ -73,7 +75,17 @@ PID_t weak_pid;
 static uint16_t mt6701_last_raw = 0;
 static uint8_t mt6701_unwrap_valid = 0;
 static uint8_t debug_rx_buf[DEBUG_RX_BUF_SIZE];
+static uint8_t debug_line_buf[DEBUG_RX_BUF_SIZE];
 static uint8_t debug_rx_len = 0;
+static uint8_t debug_rx_byte = 0;
+static volatile uint8_t debug_line_ready = 0;
+static volatile uint8_t debug_tx_busy = 0;
+static volatile uint32_t debug_tx_pause_until_ms = 0;
+static uint8_t motor_enabled = 0;
+static uint8_t motor_user_enabled = 0;
+static uint8_t motor_thermal_lock = 0;
+static uint32_t motor_enable_start_ms = 0;
+static uint32_t motor_thermal_unlock_ms = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -171,7 +183,7 @@ static void WeakPID_Update(float current_angle)
     Stepper_Stop(&Motor_42);
   }
 
-  Stepper_Set_Speed_Profile(&Motor_42, output, 5000.0f);
+  Stepper_Set_Speed_Profile(&Motor_42, output, 800.0f);
   if (Motor_42.state == STOP)
   {
     Stepper_Run_Speed(&Motor_42);
@@ -263,6 +275,26 @@ static uint8_t Debug_AppendFloat3(char *buf, uint8_t len, float value)
   return len;
 }
 
+static void Debug_SendBytes(uint8_t *buf, uint8_t len)
+{
+  debug_tx_busy = 1U;
+  HAL_UART_Transmit(&huart2, buf, len, 30);
+  debug_tx_pause_until_ms = HAL_GetTick() + 50U;
+  debug_tx_busy = 0U;
+}
+
+static void Debug_SendText(const char *text)
+{
+  uint8_t len = 0;
+
+  while (text[len] != '\0')
+  {
+    len++;
+  }
+
+  Debug_SendBytes((uint8_t *)text, len);
+}
+
 static void Debug_SendPID(void)
 {
   char msg[80];
@@ -280,7 +312,7 @@ static void Debug_SendPID(void)
   len = Debug_AppendFloat3(msg, len, weak_pid.deadband);
   len = Debug_AppendText(msg, len, "\r\n");
 
-  HAL_UART_Transmit(&huart2, (uint8_t *)msg, len, 20);
+  Debug_SendBytes((uint8_t *)msg, len);
 }
 
 static void Debug_ProcessLine(char *line)
@@ -321,28 +353,82 @@ static void Debug_ProcessLine(char *line)
 
 static void Debug_ProcessRx(void)
 {
-  uint8_t ch;
-
-  while (HAL_UART_Receive(&huart2, &ch, 1, 0) == HAL_OK)
+  if (debug_line_ready == 0U)
   {
-    if ((ch == '\r') || (ch == '\n'))
-    {
-      if (debug_rx_len > 0U)
-      {
-        debug_rx_buf[debug_rx_len] = '\0';
-        Debug_ProcessLine((char *)debug_rx_buf);
-        debug_rx_len = 0;
-      }
-    }
-    else if (debug_rx_len < (DEBUG_RX_BUF_SIZE - 1U))
-    {
-      debug_rx_buf[debug_rx_len++] = ch;
-    }
-    else
-    {
-      debug_rx_len = 0;
-    }
+    return;
   }
+
+  __disable_irq();
+  memcpy(debug_line_buf, debug_rx_buf, DEBUG_RX_BUF_SIZE);
+  debug_line_ready = 0U;
+  __enable_irq();
+
+  Debug_ProcessLine((char *)debug_line_buf);
+}
+
+static void Debug_RxStart(void)
+{
+  HAL_UART_Receive_IT(&huart2, &debug_rx_byte, 1);
+}
+
+static void Motor_EnableOutput(void)
+{
+  Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_EN);
+  motor_enabled = 1U;
+  motor_enable_start_ms = HAL_GetTick();
+}
+
+static void Motor_DisableOutput(void)
+{
+  weak_pid_enable = 0U;
+  Stepper_ForceStopPosition(&Motor_42);
+  Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_UNEN);
+  motor_enabled = 0U;
+}
+
+static uint8_t Motor_ThermalCanEnable(void)
+{
+  uint32_t now = HAL_GetTick();
+
+  if (motor_thermal_lock == 0U)
+  {
+    return 1U;
+  }
+
+  if ((int32_t)(now - motor_thermal_unlock_ms) >= 0)
+  {
+    motor_thermal_lock = 0U;
+    led_white_off;
+    Debug_SendText("HEAT READY\r\n");
+    return 1U;
+  }
+
+  return 0U;
+}
+
+static void Motor_ThermalLock(void)
+{
+  Motor_DisableOutput();
+  motor_user_enabled = 0U;
+  motor_thermal_lock = 1U;
+  motor_thermal_unlock_ms = HAL_GetTick() + MOTOR_HEAT_COOLDOWN_MS;
+  led_red_on;
+  led_white_on;
+  Debug_SendText("HEAT LOCK\r\n");
+}
+
+static void Motor_ThermalTask(void)
+{
+  uint32_t now = HAL_GetTick();
+
+  if ((motor_enabled != 0U) &&
+      ((uint32_t)(now - motor_enable_start_ms) >= MOTOR_HEAT_MAX_ENABLE_MS))
+  {
+    Motor_ThermalLock();
+    return;
+  }
+
+  (void)Motor_ThermalCanEnable();
 }
 /* USER CODE END 0 */
 
@@ -401,11 +487,11 @@ int main(void)
   }
 
   /* Keep motor and LED animation disabled while checking TMC2209 UART. */
+  Debug_RxStart();
   HAL_TIM_Base_Start_IT(&htim6);
 
-  int8_t tog = 0;
   Stepper_Init(&Motor_42, &htim1, TIM_CHANNEL_1, tmc_DIR_GPIO_Port, tmc_DIR_Pin, MODE_SPEED);
-  PID_Init(&weak_pid, 80.0f, 0.0f, 1.0f, 0.001f, 12000.0f, 20.0f, 0.2f);
+  PID_Init(&weak_pid, 80.0f, 0.0f, 1.0f, 0.001f, 5000.0f, 20.0f, 0.2f);
   Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_UNEN);
   /* USER CODE END 2 */
 
@@ -417,12 +503,13 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     Debug_ProcessRx();
+    Motor_ThermalTask();
 
     int8_t key_flag = Key_Scan();
     switch (key_flag)
     {
     case 1:
-      if (tog)
+      if (motor_user_enabled)
       {
         weak_pid_target_deg = mt6701_unwrapped_deg + 360.0f;
         PID_Reset(&weak_pid);
@@ -432,23 +519,28 @@ int main(void)
       break;
     case 2:
       Stepper_Stop(&Motor_42);
-      if (tog == 0)
+      if (motor_user_enabled == 0U)
       {
-        Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_EN);
-        weak_pid_target_deg = mt6701_unwrapped_deg;
-        PID_Reset(&weak_pid);
-        weak_pid_enable = 1U;
-        led_red_on;
-        tog = 1;
+        if (Motor_ThermalCanEnable())
+        {
+          Motor_EnableOutput();
+          weak_pid_target_deg = mt6701_unwrapped_deg;
+          PID_Reset(&weak_pid);
+          weak_pid_enable = 1U;
+          led_red_on;
+          motor_user_enabled = 1U;
+        }
+        else
+        {
+          Debug_SendText("HEAT LOCK\r\n");
+        }
       }
       else
       {
-        weak_pid_enable = 0U;
-        Stepper_ForceStopPosition(&Motor_42);
-        Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_UNEN);
+        Motor_DisableOutput();
         led_red_off;
         led_white_off;
-        tog = 0;
+        motor_user_enabled = 0U;
       }
       break;
     default:
@@ -929,9 +1021,53 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       mt6701_angle_deg = PID_RawToDeg(raw_angle);
       unwrapped_angle = MT6701_UpdateUnwrappedDeg(raw_angle);
       WeakPID_Update(unwrapped_angle);
-      tx_len = MT6701_FormatRawLine(raw_angle, tx_buf);
-      HAL_UART_Transmit(&huart2, tx_buf, tx_len, 1);
+      if ((debug_tx_busy == 0U) &&
+          ((int32_t)(HAL_GetTick() - debug_tx_pause_until_ms) >= 0))
+      {
+        tx_len = MT6701_FormatRawLine(raw_angle, tx_buf);
+        HAL_UART_Transmit(&huart2, tx_buf, tx_len, 1);
+      }
     }
+  }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  uint8_t ch;
+
+  if (huart->Instance != USART2)
+  {
+    return;
+  }
+
+  ch = debug_rx_byte;
+  if ((ch == '\r') || (ch == '\n'))
+  {
+    if ((debug_rx_len > 0U) && (debug_line_ready == 0U))
+    {
+      debug_rx_buf[debug_rx_len] = '\0';
+      debug_line_ready = 1U;
+    }
+    debug_rx_len = 0U;
+  }
+  else if ((debug_line_ready == 0U) && (debug_rx_len < (DEBUG_RX_BUF_SIZE - 1U)))
+  {
+    debug_rx_buf[debug_rx_len++] = ch;
+  }
+  else
+  {
+    debug_rx_len = 0U;
+  }
+
+  Debug_RxStart();
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART2)
+  {
+    debug_rx_len = 0U;
+    Debug_RxStart();
   }
 }
 

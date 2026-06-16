@@ -21,7 +21,7 @@ static const uint32_t TMC2209_GCONF_VALUE = 0x00000184;
  * CHOPCONF.MRES = 0 -> 256 microsteps.
  * 200-step motor: 360 / (200 * 256) = 0.00703125 deg per STEP.
  */
-static const uint32_t TMC2209_CHOPCONF_VALUE = 0x10000053;
+static const uint32_t TMC2209_CHOPCONF_VALUE = 0x18000053;
 static const uint32_t TMC2209_IHOLD_IRUN_VALUE = 0x00060C04;
 static const uint32_t TMC2209_VACTUAL_VALUE = 0x00000000;
 
