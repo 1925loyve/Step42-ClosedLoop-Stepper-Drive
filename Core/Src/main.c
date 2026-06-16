@@ -328,6 +328,20 @@ static void Debug_SendEnable(void)
   Debug_SendBytes((uint8_t *)msg, len);
 }
 
+static void Debug_SendSpeed(float speed, float accel)
+{
+  char msg[64];
+  uint8_t len = 0;
+
+  len = Debug_AppendText(msg, len, "SPEED ");
+  len = Debug_AppendFloat3(msg, len, speed);
+  len = Debug_AppendChar(msg, len, ' ');
+  len = Debug_AppendFloat3(msg, len, accel);
+  len = Debug_AppendText(msg, len, "\r\n");
+
+  Debug_SendBytes((uint8_t *)msg, len);
+}
+
 static void Debug_SendRxCount(void)
 {
   char msg[24];
@@ -361,6 +375,36 @@ static void Debug_SendError(const char *error)
   len = Debug_AppendText(msg, len, "\r\n");
 
   Debug_SendBytes((uint8_t *)msg, len);
+}
+
+static void OpenLoop_RunSpeed(float speed, float accel)
+{
+  weak_pid_enable = 0U;
+
+  if (motor_user_enabled == 0U)
+  {
+    Motor_EnableOutput();
+    led_red_on;
+    motor_user_enabled = 1U;
+  }
+
+  if (speed < 1.0f)
+  {
+    Stepper_Stop(&Motor_42);
+    Motor_42.target_speed = 0.0f;
+    Motor_42.current_speed = 0.0f;
+    led_white_off;
+    Debug_SendSpeed(0.0f, accel);
+    return;
+  }
+
+  Stepper_Set_Speed_Profile(&Motor_42, speed, accel);
+  if (Motor_42.state == STOP)
+  {
+    Stepper_Run_Speed(&Motor_42);
+  }
+  led_white_on;
+  Debug_SendSpeed(speed, accel);
 }
 
 static void Motor_SetUserEnable(uint8_t enable)
@@ -461,6 +505,30 @@ static void Debug_ProcessLine(char *line)
     }
 
     Move_ToAbsoluteAngle(target_angle);
+    return;
+  }
+
+  if (strncmp(line, "SPEED ", 6) == 0)
+  {
+    float speed;
+    float accel;
+
+    cursor = line + 6;
+    speed = strtof(cursor, &cursor);
+    accel = strtof(cursor, &cursor);
+
+    if ((speed < 0.0f) || (speed > 5000.0f))
+    {
+      Debug_SendError("SPEED_RANGE");
+      return;
+    }
+    if (accel <= 0.0f)
+    {
+      Debug_SendError("ACCEL_RANGE");
+      return;
+    }
+
+    OpenLoop_RunSpeed(speed, accel);
     return;
   }
 
