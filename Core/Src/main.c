@@ -94,6 +94,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
 static void Motor_EnableOutput(void);
+static void Motor_DisableOutput(void);
 
 /* USER CODE END PFP */
 
@@ -312,6 +313,18 @@ static void Debug_SendAngle(float angle, float move_delta)
   Debug_SendBytes((uint8_t *)msg, len);
 }
 
+static void Debug_SendEnable(void)
+{
+  char msg[16];
+  uint8_t len = 0;
+
+  len = Debug_AppendText(msg, len, "EN ");
+  len = Debug_AppendUint(msg, len, motor_user_enabled);
+  len = Debug_AppendText(msg, len, "\r\n");
+
+  Debug_SendBytes((uint8_t *)msg, len);
+}
+
 static void Debug_SendError(const char *error)
 {
   char msg[64];
@@ -324,6 +337,26 @@ static void Debug_SendError(const char *error)
   Debug_SendBytes((uint8_t *)msg, len);
 }
 
+static void Motor_SetUserEnable(uint8_t enable)
+{
+  if (enable != 0U)
+  {
+    Motor_EnableOutput();
+    weak_pid_target_deg = mt6701_unwrapped_deg;
+    PID_Reset(&weak_pid);
+    weak_pid_enable = 1U;
+    led_red_on;
+    motor_user_enabled = 1U;
+  }
+  else
+  {
+    Motor_DisableOutput();
+    led_red_off;
+    led_white_off;
+    motor_user_enabled = 0U;
+  }
+}
+
 static void Move_ToAbsoluteAngle(float target_angle)
 {
   float move_delta;
@@ -332,9 +365,7 @@ static void Move_ToAbsoluteAngle(float target_angle)
 
   if (motor_user_enabled == 0U)
   {
-    Motor_EnableOutput();
-    motor_user_enabled = 1U;
-    led_red_on;
+    Motor_SetUserEnable(1U);
   }
 
   weak_pid_target_deg = mt6701_unwrapped_deg + move_delta;
@@ -357,6 +388,32 @@ static void Debug_ProcessLine(char *line)
   if (strcmp(line, "PID?") == 0)
   {
     Debug_SendPID();
+    return;
+  }
+
+  if (strcmp(line, "EN?") == 0)
+  {
+    Debug_SendEnable();
+    return;
+  }
+
+  if (strncmp(line, "EN ", 3) == 0)
+  {
+    cursor = line + 3;
+    if (*cursor == '1')
+    {
+      Motor_SetUserEnable(1U);
+      Debug_SendEnable();
+      return;
+    }
+    if (*cursor == '0')
+    {
+      Motor_SetUserEnable(0U);
+      Debug_SendEnable();
+      return;
+    }
+
+    Debug_SendError("EN_VALUE");
     return;
   }
 
@@ -523,19 +580,11 @@ int main(void)
       Stepper_Stop(&Motor_42);
       if (motor_user_enabled == 0U)
       {
-        Motor_EnableOutput();
-        weak_pid_target_deg = mt6701_unwrapped_deg;
-        PID_Reset(&weak_pid);
-        weak_pid_enable = 1U;
-        led_red_on;
-        motor_user_enabled = 1U;
+        Motor_SetUserEnable(1U);
       }
       else
       {
-        Motor_DisableOutput();
-        led_red_off;
-        led_white_off;
-        motor_user_enabled = 0U;
+        Motor_SetUserEnable(0U);
       }
       break;
     default:
