@@ -41,6 +41,7 @@ Stepper_t Motor_42;
 /* USER CODE BEGIN PD */
 #define WEAK_PID_OUTPUT_SIGN (1.0f)
 #define DEBUG_RX_BUF_SIZE (64U)
+#define DEBUG_RAW_TX_INTERVAL_MS (10UL)
 
 /* USER CODE END PD */
 
@@ -79,6 +80,7 @@ static uint8_t debug_rx_byte = 0;
 static volatile uint8_t debug_line_ready = 0;
 static volatile uint8_t debug_tx_busy = 0;
 static volatile uint32_t debug_tx_pause_until_ms = 0;
+static volatile uint32_t debug_raw_last_tx_ms = 0;
 static uint8_t motor_user_enabled = 0;
 /* USER CODE END PV */
 
@@ -1066,8 +1068,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       unwrapped_angle = MT6701_UpdateUnwrappedDeg(raw_angle);
       WeakPID_Update(unwrapped_angle);
       if ((debug_tx_busy == 0U) &&
+          ((uint32_t)(HAL_GetTick() - debug_raw_last_tx_ms) >= DEBUG_RAW_TX_INTERVAL_MS) &&
           ((int32_t)(HAL_GetTick() - debug_tx_pause_until_ms) >= 0))
       {
+        debug_raw_last_tx_ms = HAL_GetTick();
         tx_len = MT6701_FormatRawLine(raw_angle, tx_buf);
         HAL_UART_Transmit(&huart2, tx_buf, tx_len, 1);
       }
