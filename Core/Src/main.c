@@ -41,7 +41,7 @@ Stepper_t Motor_42;
 /* USER CODE BEGIN PD */
 #define WEAK_PID_OUTPUT_SIGN (1.0f)
 #define DEBUG_RX_BUF_SIZE (64U)
-#define DEBUG_RAW_TX_INTERVAL_MS (10UL)
+#define DEBUG_RAW_TX_INTERVAL_MS (20UL)
 
 /* USER CODE END PD */
 
@@ -76,7 +76,6 @@ static uint8_t mt6701_unwrap_valid = 0;
 static uint8_t debug_rx_buf[DEBUG_RX_BUF_SIZE];
 static uint8_t debug_line_buf[DEBUG_RX_BUF_SIZE];
 static uint8_t debug_rx_len = 0;
-static uint8_t debug_rx_byte = 0;
 static volatile uint8_t debug_line_ready = 0;
 static volatile uint8_t debug_tx_busy = 0;
 static volatile uint32_t debug_tx_pause_until_ms = 0;
@@ -461,24 +460,55 @@ static void Debug_ProcessLine(char *line)
   Debug_SendPID();
 }
 
+static void Debug_ProcessRxByte(uint8_t ch)
+{
+  if ((ch == '\r') || (ch == '\n'))
+  {
+    if ((debug_rx_len > 0U) && (debug_line_ready == 0U))
+    {
+      debug_rx_buf[debug_rx_len] = '\0';
+      debug_line_ready = 1U;
+    }
+    debug_rx_len = 0U;
+    return;
+  }
+
+  if ((debug_line_ready == 0U) && (debug_rx_len < (DEBUG_RX_BUF_SIZE - 1U)))
+  {
+    debug_rx_buf[debug_rx_len++] = ch;
+  }
+  else
+  {
+    debug_rx_len = 0U;
+  }
+}
+
 static void Debug_ProcessRx(void)
 {
+  while ((huart2.Instance->ISR & USART_ISR_RXNE_RXFNE) != 0U)
+  {
+    Debug_ProcessRxByte((uint8_t)(huart2.Instance->RDR & 0xFFU));
+  }
+
+  if ((huart2.Instance->ISR & USART_ISR_ORE) != 0U)
+  {
+    __HAL_UART_CLEAR_OREFLAG(&huart2);
+    debug_rx_len = 0U;
+  }
+
   if (debug_line_ready == 0U)
   {
     return;
   }
 
-  __disable_irq();
   memcpy(debug_line_buf, debug_rx_buf, DEBUG_RX_BUF_SIZE);
   debug_line_ready = 0U;
-  __enable_irq();
 
   Debug_ProcessLine((char *)debug_line_buf);
 }
 
 static void Debug_RxStart(void)
 {
-  HAL_UART_Receive_IT(&huart2, &debug_rx_byte, 1);
 }
 
 static void Motor_EnableOutput(void)
@@ -1077,37 +1107,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       }
     }
   }
-}
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-  uint8_t ch;
-
-  if (huart->Instance != USART2)
-  {
-    return;
-  }
-
-  ch = debug_rx_byte;
-  if ((ch == '\r') || (ch == '\n'))
-  {
-    if ((debug_rx_len > 0U) && (debug_line_ready == 0U))
-    {
-      debug_rx_buf[debug_rx_len] = '\0';
-      debug_line_ready = 1U;
-    }
-    debug_rx_len = 0U;
-  }
-  else if ((debug_line_ready == 0U) && (debug_rx_len < (DEBUG_RX_BUF_SIZE - 1U)))
-  {
-    debug_rx_buf[debug_rx_len++] = ch;
-  }
-  else
-  {
-    debug_rx_len = 0U;
-  }
-
-  Debug_RxStart();
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
