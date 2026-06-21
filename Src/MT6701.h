@@ -23,8 +23,23 @@ typedef struct
     uint8_t crc_ok;
 } MT6701_Frame_t;
 
+typedef struct
+{
+    uint8_t rx[3];
+    uint32_t packet;
+    uint16_t raw_shift10;
+    uint16_t raw_shift9;
+    uint16_t raw_shift8;
+    uint16_t raw_shift7;
+    uint8_t magnetic_status;
+    uint8_t received_crc;
+    uint8_t calculated_crc;
+    uint8_t crc_ok;
+} MT6701_Debug_t;
+
 void MT6701_Init(void);
 MT6701_Status_t MT6701_ReadFrame(MT6701_Frame_t *frame);
+MT6701_Status_t MT6701_ReadDebug(MT6701_Debug_t *debug);
 MT6701_Status_t MT6701_ReadRawAngle(uint16_t *raw_angle);
 MT6701_Status_t MT6701_ReadRawAngleNoCrc(uint16_t *raw_angle);
 MT6701_Status_t MT6701_ReadAngleDeg(float *angle_deg);

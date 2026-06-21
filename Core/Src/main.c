@@ -255,6 +255,15 @@ static uint8_t Debug_AppendUint(char *buf, uint8_t len, uint32_t value)
   return len;
 }
 
+static uint8_t Debug_AppendHexByte(char *buf, uint8_t len, uint8_t value)
+{
+  static const char hex[] = "0123456789ABCDEF";
+
+  buf[len++] = hex[(value >> 4) & 0x0FU];
+  buf[len++] = hex[value & 0x0FU];
+  return len;
+}
+
 static uint8_t Debug_AppendFloat3(char *buf, uint8_t len, float value)
 {
   uint32_t scaled;
@@ -339,6 +348,51 @@ static void Debug_SendSpeed(float speed, float accel)
   len = Debug_AppendFloat3(msg, len, accel);
   len = Debug_AppendText(msg, len, "\r\n");
 
+  Debug_SendBytes((uint8_t *)msg, len);
+}
+
+static void Debug_SendMT6701Debug(void)
+{
+  MT6701_Debug_t debug;
+  MT6701_Status_t status;
+  char msg[120];
+  uint8_t len = 0;
+
+  HAL_TIM_Base_Stop_IT(&htim6);
+  status = MT6701_ReadDebug(&debug);
+  HAL_TIM_Base_Start_IT(&htim6);
+
+  len = Debug_AppendText(msg, len, "MTD ");
+  len = Debug_AppendText(msg, len, "st=");
+  len = Debug_AppendUint(msg, len, status);
+
+  if (status == MT6701_OK)
+  {
+    len = Debug_AppendText(msg, len, " b=");
+    len = Debug_AppendHexByte(msg, len, debug.rx[0]);
+    len = Debug_AppendChar(msg, len, ' ');
+    len = Debug_AppendHexByte(msg, len, debug.rx[1]);
+    len = Debug_AppendChar(msg, len, ' ');
+    len = Debug_AppendHexByte(msg, len, debug.rx[2]);
+    len = Debug_AppendText(msg, len, " s10=");
+    len = Debug_AppendUint(msg, len, debug.raw_shift10);
+    len = Debug_AppendText(msg, len, " s9=");
+    len = Debug_AppendUint(msg, len, debug.raw_shift9);
+    len = Debug_AppendText(msg, len, " s8=");
+    len = Debug_AppendUint(msg, len, debug.raw_shift8);
+    len = Debug_AppendText(msg, len, " s7=");
+    len = Debug_AppendUint(msg, len, debug.raw_shift7);
+    len = Debug_AppendText(msg, len, " mag=");
+    len = Debug_AppendUint(msg, len, debug.magnetic_status);
+    len = Debug_AppendText(msg, len, " crc=");
+    len = Debug_AppendUint(msg, len, debug.received_crc);
+    len = Debug_AppendChar(msg, len, '/');
+    len = Debug_AppendUint(msg, len, debug.calculated_crc);
+    len = Debug_AppendText(msg, len, " ok=");
+    len = Debug_AppendUint(msg, len, debug.crc_ok);
+  }
+
+  len = Debug_AppendText(msg, len, "\r\n");
   Debug_SendBytes((uint8_t *)msg, len);
 }
 
@@ -464,6 +518,12 @@ static void Debug_ProcessLine(char *line)
   if (strcmp(line, "EN?") == 0)
   {
     Debug_SendEnable();
+    return;
+  }
+
+  if (strcmp(line, "MTD?") == 0)
+  {
+    Debug_SendMT6701Debug();
     return;
   }
 

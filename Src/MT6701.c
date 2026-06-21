@@ -36,23 +36,36 @@ void MT6701_Init(void)
     MT6701_CsHigh();
 }
 
+static MT6701_Status_t MT6701_ReadPacket(uint8_t rx[3])
+{
+    HAL_StatusTypeDef hal_status;
+
+    MT6701_CsLow();
+    hal_status = HAL_SPI_Receive(&hspi1, rx, 3, 10);
+    MT6701_CsHigh();
+
+    if (hal_status != HAL_OK)
+    {
+        return MT6701_HAL_ERROR;
+    }
+
+    return MT6701_OK;
+}
+
 MT6701_Status_t MT6701_ReadFrame(MT6701_Frame_t *frame)
 {
     uint8_t rx[3] = {0};
-    HAL_StatusTypeDef hal_status;
+    MT6701_Status_t status;
 
     if (frame == 0)
     {
         return MT6701_NULL_ERROR;
     }
 
-    MT6701_CsLow();
-    hal_status = HAL_SPI_Receive(&hspi1, rx, sizeof(rx), 10);
-    MT6701_CsHigh();
-
-    if (hal_status != HAL_OK)
+    status = MT6701_ReadPacket(rx);
+    if (status != MT6701_OK)
     {
-        return MT6701_HAL_ERROR;
+        return status;
     }
 
     uint32_t packet = ((uint32_t)rx[0] << 16) |
@@ -71,6 +84,40 @@ MT6701_Status_t MT6701_ReadFrame(MT6701_Frame_t *frame)
     {
         return MT6701_CRC_ERROR;
     }
+
+    return MT6701_OK;
+}
+
+MT6701_Status_t MT6701_ReadDebug(MT6701_Debug_t *debug)
+{
+    MT6701_Status_t status;
+
+    if (debug == 0)
+    {
+        return MT6701_NULL_ERROR;
+    }
+
+    debug->rx[0] = 0U;
+    debug->rx[1] = 0U;
+    debug->rx[2] = 0U;
+
+    status = MT6701_ReadPacket(debug->rx);
+    if (status != MT6701_OK)
+    {
+        return status;
+    }
+
+    debug->packet = ((uint32_t)debug->rx[0] << 16) |
+                    ((uint32_t)debug->rx[1] << 8) |
+                    ((uint32_t)debug->rx[2]);
+    debug->raw_shift10 = (uint16_t)((debug->packet >> 10) & 0x3FFFU);
+    debug->raw_shift9 = (uint16_t)((debug->packet >> 9) & 0x3FFFU);
+    debug->raw_shift8 = (uint16_t)((debug->packet >> 8) & 0x3FFFU);
+    debug->raw_shift7 = (uint16_t)((debug->packet >> 7) & 0x3FFFU);
+    debug->magnetic_status = (uint8_t)((debug->packet >> 6) & 0x0FU);
+    debug->received_crc = (uint8_t)(debug->packet & 0x3FU);
+    debug->calculated_crc = MT6701_CalcCrc6((debug->packet >> 6) & 0x3FFFFU);
+    debug->crc_ok = (debug->received_crc == debug->calculated_crc) ? 1U : 0U;
 
     return MT6701_OK;
 }
