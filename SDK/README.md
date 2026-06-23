@@ -9,9 +9,13 @@ platform UART API. You build a frame, then send it with your own UART function.
 step42_protocol.h
 step42_protocol.c
 example_minimal.c
+step42_stm32_hal.h
+step42_stm32_hal.c
+example_stm32_hal.c
 ```
 
-Add `step42_protocol.c/.h` to the user's project.
+Add `step42_protocol.c/.h` to every project. For STM32 HAL projects, also add
+`step42_stm32_hal.c/.h`.
 
 ## Minimal Usage
 
@@ -34,6 +38,30 @@ uart_send(tx, len);
 For very simple one-way control, it can also be fixed at `0`.
 
 ## STM32 HAL Example
+
+Simple wrapper usage:
+
+```c
+#include "step42_stm32_hal.h"
+
+extern UART_HandleTypeDef huart2;
+
+Step42_STM32HAL_Handle motor;
+
+void app_init(void)
+{
+    Step42_STM32HAL_Init(&motor, &huart2, 100);
+}
+
+void app_run(void)
+{
+    Step42_STM32HAL_Enable(&motor, 1);
+    Step42_STM32HAL_SetMode(&motor, STEP42_MODE_CLOSED_POSITION);
+    Step42_STM32HAL_SetAngle(&motor, 90.0f);
+}
+```
+
+Low-level usage:
 
 ```c
 uint8_t tx[STEP42_MAX_FRAME_SIZE];
