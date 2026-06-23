@@ -41,6 +41,9 @@ Stepper_t Motor_42;
 /* USER CODE BEGIN PD */
 #define WEAK_PID_OUTPUT_SIGN (1.0f)
 #define WEAK_PID_ACCEL_STEPS (3000.0f)
+#define MOTOR_STEPS_PER_REV (6400.0f)
+#define OPEN_POSITION_MAX_SPEED (2500.0f)
+#define OPEN_POSITION_ACCEL (5000.0f)
 #define DEBUG_RX_BUF_SIZE (64U)
 #define DEBUG_RAW_TX_INTERVAL_MS (20UL)
 #define CTRL_SOF1 (0xA5U)
@@ -54,10 +57,17 @@ Stepper_t Motor_42;
 #define CTRL_CMD_PID (0x05U)
 #define CTRL_CMD_STREAM (0x06U)
 #define CTRL_CMD_QUERY (0x07U)
+#define CTRL_CMD_MODE (0x08U)
+#define CTRL_CMD_STOP (0x09U)
 #define CTRL_STATUS_OK (0x00U)
 #define CTRL_STATUS_BAD_LEN (0x01U)
 #define CTRL_STATUS_RANGE (0x02U)
 #define CTRL_STATUS_UNKNOWN_CMD (0x03U)
+
+#define CTRL_MODE_OPEN_POSITION (0x00U)
+#define CTRL_MODE_CLOSED_POSITION (0x01U)
+#define CTRL_MODE_OPEN_SPEED (0x02U)
+#define CTRL_MODE_CLOSED_SPEED (0x03U)
 
 /* USER CODE END PD */
 
@@ -87,6 +97,7 @@ volatile float weak_pid_target_deg = 0.0f;
 volatile float weak_pid_output_steps = 0.0f;
 volatile uint8_t weak_pid_enable = 0;
 PID_t weak_pid;
+PID_t speed_pid;
 static uint16_t mt6701_last_raw = 0;
 static uint8_t mt6701_unwrap_valid = 0;
 static uint8_t debug_rx_buf[DEBUG_RX_BUF_SIZE];
@@ -106,6 +117,11 @@ static uint8_t ctrl_rx_cmd = 0;
 static uint8_t ctrl_rx_seq = 0;
 static uint8_t ctrl_rx_index = 0;
 static uint8_t ctrl_rx_payload[CTRL_MAX_PAYLOAD];
+static uint8_t control_mode = CTRL_MODE_CLOSED_POSITION;
+static float closed_speed_target_steps = 0.0f;
+static float closed_speed_feedback_steps = 0.0f;
+static uint8_t speed_feedback_valid = 0U;
+static float speed_last_unwrapped_deg = 0.0f;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -550,6 +566,7 @@ static void Debug_SendError(const char *error)
 static void OpenLoop_RunSpeed(float speed, float accel)
 {
   weak_pid_enable = 0U;
+  closed_speed_target_steps = 0.0f;
 
   if (motor_user_enabled == 0U)
   {
@@ -564,7 +581,6 @@ static void OpenLoop_RunSpeed(float speed, float accel)
     Motor_42.target_speed = 0.0f;
     Motor_42.current_speed = 0.0f;
     led_white_off;
-    Debug_SendSpeed(0.0f, accel);
     return;
   }
 
@@ -574,7 +590,6 @@ static void OpenLoop_RunSpeed(float speed, float accel)
     Stepper_Run_Speed(&Motor_42);
   }
   led_white_on;
-  Debug_SendSpeed(speed, accel);
 }
 
 static void Motor_SetUserEnable(uint8_t enable)
@@ -582,9 +597,16 @@ static void Motor_SetUserEnable(uint8_t enable)
   if (enable != 0U)
   {
     Motor_EnableOutput();
-    weak_pid_target_deg = mt6701_unwrapped_deg;
-    PID_Reset(&weak_pid);
-    weak_pid_enable = 1U;
+    if (control_mode == CTRL_MODE_CLOSED_POSITION)
+    {
+      weak_pid_target_deg = mt6701_unwrapped_deg;
+      PID_Reset(&weak_pid);
+      weak_pid_enable = 1U;
+    }
+    else
+    {
+      weak_pid_enable = 0U;
+    }
     led_red_on;
     motor_user_enabled = 1U;
   }
@@ -612,8 +634,193 @@ static void Move_ToAbsoluteAngle(float target_angle)
   PID_Reset(&weak_pid);
   weak_pid_enable = 1U;
   led_white_on;
+}
 
-  Debug_SendAngle(target_angle, move_delta);
+static void StopMotion(void)
+{
+  weak_pid_enable = 0U;
+  closed_speed_target_steps = 0.0f;
+  Stepper_ForceStopPosition(&Motor_42);
+  led_white_off;
+}
+
+static void Control_SetMode(uint8_t mode)
+{
+  if (mode > CTRL_MODE_CLOSED_SPEED)
+  {
+    return;
+  }
+
+  StopMotion();
+  control_mode = mode;
+  if (mode == CTRL_MODE_OPEN_POSITION)
+  {
+    Motor_42.run_mode = MODE_POSITION;
+  }
+  else
+  {
+    Motor_42.run_mode = MODE_SPEED;
+  }
+
+  if ((motor_user_enabled != 0U) && (mode == CTRL_MODE_CLOSED_POSITION))
+  {
+    weak_pid_target_deg = mt6701_unwrapped_deg;
+    PID_Reset(&weak_pid);
+    weak_pid_enable = 1U;
+  }
+}
+
+static void Move_ToOpenLoopAngle(float target_angle)
+{
+  float move_delta;
+  int32_t steps;
+
+  move_delta = PID_AngleErrorDeg(target_angle, mt6701_angle_deg);
+  steps = (int32_t)((move_delta * MOTOR_STEPS_PER_REV / 360.0f) + ((move_delta >= 0.0f) ? 0.5f : -0.5f));
+  if (steps == 0)
+  {
+    return;
+  }
+
+  if (motor_user_enabled == 0U)
+  {
+    Motor_SetUserEnable(1U);
+  }
+
+  weak_pid_enable = 0U;
+  closed_speed_target_steps = 0.0f;
+  Motor_42.run_mode = MODE_POSITION;
+  Stepper_Set_Speed_Profile(&Motor_42, OPEN_POSITION_MAX_SPEED, OPEN_POSITION_ACCEL);
+  Stepper_Move(&Motor_42, steps);
+  led_white_on;
+}
+
+static void Move_ToAngleByMode(float target_angle)
+{
+  if (control_mode == CTRL_MODE_OPEN_POSITION)
+  {
+    Move_ToOpenLoopAngle(target_angle);
+  }
+  else
+  {
+    if (control_mode != CTRL_MODE_CLOSED_POSITION)
+    {
+      Control_SetMode(CTRL_MODE_CLOSED_POSITION);
+    }
+    Move_ToAbsoluteAngle(target_angle);
+  }
+}
+
+static void ClosedSpeed_Run(float speed, float accel)
+{
+  (void)accel;
+
+  if (motor_user_enabled == 0U)
+  {
+    Motor_EnableOutput();
+    led_red_on;
+    motor_user_enabled = 1U;
+  }
+
+  weak_pid_enable = 0U;
+  Motor_42.run_mode = MODE_SPEED;
+  closed_speed_target_steps = speed;
+  PID_Reset(&speed_pid);
+
+  if (AbsF(speed) < 1.0f)
+  {
+    StopMotion();
+    return;
+  }
+
+  Stepper_Set_Speed_Profile(&Motor_42, speed, WEAK_PID_ACCEL_STEPS);
+  if (Motor_42.state == STOP)
+  {
+    Stepper_Run_Speed(&Motor_42);
+  }
+  led_white_on;
+}
+
+static void ClosedSpeed_Update(void)
+{
+  float correction;
+  float command_speed;
+
+  if ((control_mode != CTRL_MODE_CLOSED_SPEED) ||
+      (motor_user_enabled == 0U) ||
+      (AbsF(closed_speed_target_steps) < 1.0f) ||
+      (speed_feedback_valid == 0U))
+  {
+    return;
+  }
+
+  correction = PID_UpdateLinear(&speed_pid, closed_speed_target_steps, closed_speed_feedback_steps);
+  command_speed = closed_speed_target_steps + correction;
+  if (command_speed > 5000.0f)
+  {
+    command_speed = 5000.0f;
+  }
+  else if (command_speed < -5000.0f)
+  {
+    command_speed = -5000.0f;
+  }
+
+  Stepper_Set_Speed_Profile(&Motor_42, command_speed, WEAK_PID_ACCEL_STEPS);
+  if (Motor_42.state == STOP)
+  {
+    Stepper_Run_Speed(&Motor_42);
+  }
+}
+
+static void RunSpeedByMode(float speed, float accel)
+{
+  if (control_mode == CTRL_MODE_CLOSED_SPEED)
+  {
+    ClosedSpeed_Run(speed, accel);
+  }
+  else
+  {
+    if (control_mode != CTRL_MODE_OPEN_SPEED)
+    {
+      Control_SetMode(CTRL_MODE_OPEN_SPEED);
+    }
+    Motor_42.run_mode = MODE_SPEED;
+    OpenLoop_RunSpeed(speed, accel);
+  }
+}
+
+static void Ctrl_SendQuery(uint8_t seq)
+{
+  uint8_t resp[10];
+  uint16_t angle_cdeg;
+  int16_t pid_output;
+
+  angle_cdeg = (uint16_t)(mt6701_angle_deg * 100.0f + 0.5f);
+  if (angle_cdeg >= 36000U)
+  {
+    angle_cdeg = 0U;
+  }
+  if (weak_pid_output_steps > 32767.0f)
+  {
+    pid_output = 32767;
+  }
+  else if (weak_pid_output_steps < -32768.0f)
+  {
+    pid_output = -32768;
+  }
+  else
+  {
+    pid_output = (int16_t)weak_pid_output_steps;
+  }
+
+  resp[0] = CTRL_STATUS_OK;
+  resp[1] = motor_user_enabled;
+  resp[2] = debug_stream_enable;
+  resp[3] = control_mode;
+  Ctrl_WriteU16(resp, 4U, mt6701_raw_angle);
+  Ctrl_WriteU16(resp, 6U, angle_cdeg);
+  Ctrl_WriteI16(resp, 8U, pid_output);
+  Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
 static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint8_t len)
@@ -670,7 +877,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     {
       target_angle = 0.0f;
     }
-    Move_ToAbsoluteAngle(target_angle);
+    Move_ToAngleByMode(target_angle);
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -694,7 +901,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       return;
     }
 
-    OpenLoop_RunSpeed((float)speed, (float)accel);
+    RunSpeedByMode((float)speed, (float)accel);
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -751,41 +958,44 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
   if (cmd == CTRL_CMD_QUERY)
   {
-    uint8_t resp[9];
-    uint16_t angle_cdeg;
-    int16_t pid_output;
-
     if (len != 0U)
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
 
-    angle_cdeg = (uint16_t)(mt6701_angle_deg * 100.0f + 0.5f);
-    if (angle_cdeg >= 36000U)
+    Ctrl_SendQuery(seq);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_MODE)
+  {
+    if (len != 1U)
     {
-      angle_cdeg = 0U;
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
     }
-    if (weak_pid_output_steps > 32767.0f)
+    if (payload[0] > CTRL_MODE_CLOSED_SPEED)
     {
-      pid_output = 32767;
-    }
-    else if (weak_pid_output_steps < -32768.0f)
-    {
-      pid_output = -32768;
-    }
-    else
-    {
-      pid_output = (int16_t)weak_pid_output_steps;
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
     }
 
-    resp[0] = CTRL_STATUS_OK;
-    resp[1] = motor_user_enabled;
-    resp[2] = debug_stream_enable;
-    Ctrl_WriteU16(resp, 3U, mt6701_raw_angle);
-    Ctrl_WriteU16(resp, 5U, angle_cdeg);
-    Ctrl_WriteI16(resp, 7U, pid_output);
-    Ctrl_SendFrame(cmd, seq, resp, sizeof(resp));
+    Control_SetMode(payload[0]);
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_STOP)
+  {
+    if (len != 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+
+    StopMotion();
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
 
@@ -1009,34 +1219,7 @@ static void Debug_ProcessLine(char *line)
 static void Debug_ProcessRxByte(uint8_t ch)
 {
   debug_rx_count++;
-
-  if ((ctrl_rx_state != 0U) || (ch == CTRL_SOF1))
-  {
-    if (Ctrl_ProcessRxByte(ch) != 0U)
-    {
-      return;
-    }
-  }
-
-  if ((ch == '\r') || (ch == '\n'))
-  {
-    if ((debug_rx_len > 0U) && (debug_line_ready == 0U))
-    {
-      debug_rx_buf[debug_rx_len] = '\0';
-      debug_line_ready = 1U;
-    }
-    debug_rx_len = 0U;
-    return;
-  }
-
-  if ((debug_line_ready == 0U) && (debug_rx_len < (DEBUG_RX_BUF_SIZE - 1U)))
-  {
-    debug_rx_buf[debug_rx_len++] = ch;
-  }
-  else
-  {
-    debug_rx_len = 0U;
-  }
+  (void)Ctrl_ProcessRxByte(ch);
 }
 
 static void Debug_ProcessRx(void)
@@ -1052,15 +1235,7 @@ static void Debug_ProcessRx(void)
     debug_rx_len = 0U;
   }
 
-  if (debug_line_ready == 0U)
-  {
-    return;
-  }
-
-  memcpy(debug_line_buf, debug_rx_buf, DEBUG_RX_BUF_SIZE);
   debug_line_ready = 0U;
-
-  Debug_ProcessLine((char *)debug_line_buf);
 }
 
 static void Debug_RxStart(void)
@@ -1140,6 +1315,7 @@ int main(void)
 
   Stepper_Init(&Motor_42, &htim1, TIM_CHANNEL_1, tmc_DIR_GPIO_Port, tmc_DIR_Pin, MODE_SPEED);
   PID_Init(&weak_pid, 180.0f, 0.2f, 0.0f, 0.001f, 5000.0f, 20.0f, 0.08f);
+  PID_Init(&speed_pid, 0.25f, 1.0f, 0.0f, 0.001f, 1500.0f, 1000.0f, 5.0f);
   Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_UNEN);
   /* USER CODE END 2 */
 
@@ -1151,7 +1327,6 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     Debug_ProcessRx();
-    Debug_RxCountTask();
 
     int8_t key_flag = Key_Scan();
     switch (key_flag)
@@ -1642,8 +1817,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   if (htim->Instance == TIM6)
   {
     uint16_t raw_angle = 0;
-    uint8_t tx_buf[7];
-    uint8_t tx_len;
 
     mt6701_status = MT6701_ReadRawAngleNoCrc(&raw_angle);
     if (mt6701_status == MT6701_OK)
@@ -1653,15 +1826,26 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       mt6701_raw_angle = raw_angle;
       mt6701_angle_deg = PID_RawToDeg(raw_angle);
       unwrapped_angle = MT6701_UpdateUnwrappedDeg(raw_angle);
+      if (speed_feedback_valid == 0U)
+      {
+        speed_last_unwrapped_deg = unwrapped_angle;
+        speed_feedback_valid = 1U;
+        closed_speed_feedback_steps = 0.0f;
+      }
+      else
+      {
+        closed_speed_feedback_steps = (unwrapped_angle - speed_last_unwrapped_deg) * MOTOR_STEPS_PER_REV / 360.0f / 0.001f;
+        speed_last_unwrapped_deg = unwrapped_angle;
+      }
       WeakPID_Update(unwrapped_angle);
+      ClosedSpeed_Update();
       if ((debug_stream_enable != 0U) &&
           (debug_tx_busy == 0U) &&
           ((uint32_t)(HAL_GetTick() - debug_raw_last_tx_ms) >= DEBUG_RAW_TX_INTERVAL_MS) &&
           ((int32_t)(HAL_GetTick() - debug_tx_pause_until_ms) >= 0))
       {
         debug_raw_last_tx_ms = HAL_GetTick();
-        tx_len = MT6701_FormatRawLine(raw_angle, tx_buf);
-        HAL_UART_Transmit(&huart2, tx_buf, tx_len, 1);
+        Ctrl_SendQuery(0U);
       }
     }
   }

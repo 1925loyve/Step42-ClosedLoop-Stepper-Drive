@@ -30,13 +30,18 @@ void step42_demo(void)
     len = Step42_BuildEnable(tx, sizeof(tx), ++seq, 1);
     user_uart_send(tx, len);
 
+    len = Step42_BuildSetMode(tx, sizeof(tx), ++seq, STEP42_MODE_CLOSED_POSITION);
+    user_uart_send(tx, len);
+
     len = Step42_BuildSetAngle(tx, sizeof(tx), ++seq, 90.0f);
+    user_uart_send(tx, len);
+
+    len = Step42_BuildSetMode(tx, sizeof(tx), ++seq, STEP42_MODE_OPEN_SPEED);
     user_uart_send(tx, len);
 
     len = Step42_BuildSetSpeed(tx, sizeof(tx), ++seq, 1000, 3000);
     user_uart_send(tx, len);
 
-    len = Step42_BuildSetSpeed(tx, sizeof(tx), ++seq, 0, 3000);
+    len = Step42_BuildStop(tx, sizeof(tx), ++seq);
     user_uart_send(tx, len);
 }
-

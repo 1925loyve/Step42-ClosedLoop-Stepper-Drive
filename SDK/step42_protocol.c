@@ -328,6 +328,24 @@ uint16_t Step42_BuildQuery(uint8_t *buf, uint16_t max_len, uint8_t seq)
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_QUERY, seq, 0, 0U);
 }
 
+uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode)
+{
+    uint8_t payload[1];
+
+    if (mode > STEP42_MODE_CLOSED_SPEED)
+    {
+        return 0U;
+    }
+
+    payload[0] = mode;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_MODE, seq, payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildStop(uint8_t *buf, uint16_t max_len, uint8_t seq)
+{
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_STOP, seq, 0, 0U);
+}
+
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status)
 {
     if ((response == 0) || (status == 0) || (response->len < 1U))
@@ -344,7 +362,7 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     if ((response == 0) ||
         (status == 0) ||
         (response->cmd != STEP42_CMD_QUERY) ||
-        (response->len < 9U))
+        (response->len < 10U))
     {
         return -1;
     }
@@ -352,9 +370,10 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->status = response->payload[0];
     status->enabled = response->payload[1];
     status->stream_enabled = response->payload[2];
-    status->raw_angle = Step42_ReadU16(response->payload, 3U);
-    status->angle_cdeg = Step42_ReadU16(response->payload, 5U);
+    status->mode = response->payload[3];
+    status->raw_angle = Step42_ReadU16(response->payload, 4U);
+    status->angle_cdeg = Step42_ReadU16(response->payload, 6U);
     status->angle_deg = ((float)status->angle_cdeg) / 100.0f;
-    status->pid_output = Step42_ReadI16(response->payload, 7U);
+    status->pid_output = Step42_ReadI16(response->payload, 8U);
     return 0;
 }

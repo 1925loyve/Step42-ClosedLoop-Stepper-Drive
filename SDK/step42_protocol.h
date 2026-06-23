@@ -21,11 +21,18 @@ extern "C" {
 #define STEP42_CMD_PID              (0x05U)
 #define STEP42_CMD_STREAM           (0x06U)
 #define STEP42_CMD_QUERY            (0x07U)
+#define STEP42_CMD_MODE             (0x08U)
+#define STEP42_CMD_STOP             (0x09U)
 
 #define STEP42_STATUS_OK            (0x00U)
 #define STEP42_STATUS_BAD_LEN       (0x01U)
 #define STEP42_STATUS_RANGE         (0x02U)
 #define STEP42_STATUS_UNKNOWN_CMD   (0x03U)
+
+#define STEP42_MODE_OPEN_POSITION   (0x00U)
+#define STEP42_MODE_CLOSED_POSITION (0x01U)
+#define STEP42_MODE_OPEN_SPEED      (0x02U)
+#define STEP42_MODE_CLOSED_SPEED    (0x03U)
 
 typedef enum
 {
@@ -58,6 +65,7 @@ typedef struct
     uint8_t status;
     uint8_t enabled;
     uint8_t stream_enabled;
+    uint8_t mode;
     uint16_t raw_angle;
     uint16_t angle_cdeg;
     float angle_deg;
@@ -95,6 +103,8 @@ uint16_t Step42_BuildSetPID(uint8_t *buf,
                             float deadband);
 uint16_t Step42_BuildSetStream(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t enable);
 uint16_t Step42_BuildQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
+uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode);
+uint16_t Step42_BuildStop(uint8_t *buf, uint16_t max_len, uint8_t seq);
 
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status);
 int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *status);
@@ -104,4 +114,3 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
 #endif
 
 #endif
-

@@ -23,6 +23,9 @@ uint16_t len;
 len = Step42_BuildEnable(tx, sizeof(tx), ++seq, 1);
 uart_send(tx, len);
 
+len = Step42_BuildSetMode(tx, sizeof(tx), ++seq, STEP42_MODE_CLOSED_POSITION);
+uart_send(tx, len);
+
 len = Step42_BuildSetAngle(tx, sizeof(tx), ++seq, 90.0f);
 uart_send(tx, len);
 ```
@@ -83,3 +86,21 @@ if (Step42_ParseByte(&parser, rx_byte, &resp) == STEP42_PARSE_FRAME)
 }
 ```
 
+## Control Modes
+
+```text
+STEP42_MODE_OPEN_POSITION    fixed open-loop step move to angle
+STEP42_MODE_CLOSED_POSITION  encoder PID position control
+STEP42_MODE_OPEN_SPEED       open-loop continuous speed
+STEP42_MODE_CLOSED_SPEED     encoder feedback weak speed control
+```
+
+Set the mode first, then send angle or speed:
+
+```c
+len = Step42_BuildSetMode(tx, sizeof(tx), ++seq, STEP42_MODE_CLOSED_SPEED);
+uart_send(tx, len);
+
+len = Step42_BuildSetSpeed(tx, sizeof(tx), ++seq, 1000, 3000);
+uart_send(tx, len);
+```
