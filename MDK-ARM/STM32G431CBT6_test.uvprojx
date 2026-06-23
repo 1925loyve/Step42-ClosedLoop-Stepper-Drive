@@ -604,6 +604,16 @@
               <FileType>5</FileType>
               <FilePath>..\Src\pid.h</FilePath>
             </File>
+            <File>
+              <FileName>Step42SlaveProtocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\Step42SlaveProtocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>Step42SlaveProtocol.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Src\Step42SlaveProtocol.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

@@ -28,6 +28,7 @@
 #include "../../Src/MT6701.h"
 #include "../../Src/Key.h"
 #include "../../Src/pid.h"
+#include "../../Src/Step42SlaveProtocol.h"
 #include <stdlib.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -46,28 +47,6 @@ Stepper_t Motor_42;
 #define OPEN_POSITION_ACCEL (5000.0f)
 #define DEBUG_RX_BUF_SIZE (64U)
 #define DEBUG_RAW_TX_INTERVAL_MS (20UL)
-#define CTRL_SOF1 (0xA5U)
-#define CTRL_SOF2 (0x5AU)
-#define CTRL_MAX_PAYLOAD (24U)
-#define CTRL_PROTO_VERSION (1U)
-#define CTRL_CMD_PING (0x01U)
-#define CTRL_CMD_ENABLE (0x02U)
-#define CTRL_CMD_ANGLE (0x03U)
-#define CTRL_CMD_SPEED (0x04U)
-#define CTRL_CMD_PID (0x05U)
-#define CTRL_CMD_STREAM (0x06U)
-#define CTRL_CMD_QUERY (0x07U)
-#define CTRL_CMD_MODE (0x08U)
-#define CTRL_CMD_STOP (0x09U)
-#define CTRL_STATUS_OK (0x00U)
-#define CTRL_STATUS_BAD_LEN (0x01U)
-#define CTRL_STATUS_RANGE (0x02U)
-#define CTRL_STATUS_UNKNOWN_CMD (0x03U)
-
-#define CTRL_MODE_OPEN_POSITION (0x00U)
-#define CTRL_MODE_CLOSED_POSITION (0x01U)
-#define CTRL_MODE_OPEN_SPEED (0x02U)
-#define CTRL_MODE_CLOSED_SPEED (0x03U)
 
 /* USER CODE END PD */
 
@@ -111,12 +90,7 @@ static volatile uint32_t debug_rx_count = 0;
 static uint32_t debug_rx_count_last_tx_ms = 0;
 static uint8_t motor_user_enabled = 0;
 static uint8_t debug_stream_enable = 1U;
-static uint8_t ctrl_rx_state = 0;
-static uint8_t ctrl_rx_len = 0;
-static uint8_t ctrl_rx_cmd = 0;
-static uint8_t ctrl_rx_seq = 0;
-static uint8_t ctrl_rx_index = 0;
-static uint8_t ctrl_rx_payload[CTRL_MAX_PAYLOAD];
+static Step42Slave_Parser_t ctrl_parser;
 static uint8_t control_mode = CTRL_MODE_CLOSED_POSITION;
 static float closed_speed_target_steps = 0.0f;
 static float closed_speed_feedback_steps = 0.0f;
@@ -303,50 +277,6 @@ static uint8_t Debug_AppendHexByte(char *buf, uint8_t len, uint8_t value)
   return len;
 }
 
-static uint8_t Ctrl_Crc8(const uint8_t *data, uint8_t len)
-{
-  uint8_t crc = 0x00U;
-
-  while (len-- > 0U)
-  {
-    crc ^= *data++;
-    for (uint8_t bit = 0; bit < 8U; bit++)
-    {
-      if ((crc & 0x80U) != 0U)
-      {
-        crc = (uint8_t)((crc << 1) ^ 0x07U);
-      }
-      else
-      {
-        crc <<= 1;
-      }
-    }
-  }
-
-  return crc;
-}
-
-static int16_t Ctrl_ReadI16(const uint8_t *payload)
-{
-  return (int16_t)((uint16_t)payload[0] | ((uint16_t)payload[1] << 8));
-}
-
-static uint16_t Ctrl_ReadU16(const uint8_t *payload)
-{
-  return (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
-}
-
-static void Ctrl_WriteU16(uint8_t *payload, uint8_t index, uint16_t value)
-{
-  payload[index] = (uint8_t)(value & 0xFFU);
-  payload[index + 1U] = (uint8_t)(value >> 8);
-}
-
-static void Ctrl_WriteI16(uint8_t *payload, uint8_t index, int16_t value)
-{
-  Ctrl_WriteU16(payload, index, (uint16_t)value);
-}
-
 static uint8_t Debug_AppendFloat3(char *buf, uint8_t len, float value)
 {
   uint32_t scaled;
@@ -376,31 +306,14 @@ static void Debug_SendBytes(uint8_t *buf, uint8_t len)
 
 static void Ctrl_SendFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint8_t len)
 {
-  uint8_t frame[CTRL_MAX_PAYLOAD + 6U];
-  uint8_t crc_buf[CTRL_MAX_PAYLOAD + 3U];
+  uint8_t frame[CTRL_MAX_FRAME_SIZE];
+  uint8_t frame_len;
 
-  if (len > CTRL_MAX_PAYLOAD)
+  frame_len = Step42Slave_BuildResponse(frame, sizeof(frame), cmd, seq, payload, len);
+  if (frame_len > 0U)
   {
-    return;
+    Debug_SendBytes(frame, frame_len);
   }
-
-  frame[0] = CTRL_SOF2;
-  frame[1] = CTRL_SOF1;
-  frame[2] = len;
-  frame[3] = (uint8_t)(cmd | 0x80U);
-  frame[4] = seq;
-  crc_buf[0] = len;
-  crc_buf[1] = frame[3];
-  crc_buf[2] = seq;
-
-  for (uint8_t i = 0; i < len; i++)
-  {
-    frame[5U + i] = payload[i];
-    crc_buf[3U + i] = payload[i];
-  }
-
-  frame[5U + len] = Ctrl_Crc8(crc_buf, (uint8_t)(len + 3U));
-  Debug_SendBytes(frame, (uint8_t)(len + 6U));
 }
 
 static void Ctrl_SendStatus(uint8_t cmd, uint8_t seq, uint8_t status)
@@ -817,9 +730,9 @@ static void Ctrl_SendQuery(uint8_t seq)
   resp[1] = motor_user_enabled;
   resp[2] = debug_stream_enable;
   resp[3] = control_mode;
-  Ctrl_WriteU16(resp, 4U, mt6701_raw_angle);
-  Ctrl_WriteU16(resp, 6U, angle_cdeg);
-  Ctrl_WriteI16(resp, 8U, pid_output);
+  Step42Slave_WriteU16(resp, 4U, mt6701_raw_angle);
+  Step42Slave_WriteU16(resp, 6U, angle_cdeg);
+  Step42Slave_WriteI16(resp, 8U, pid_output);
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -865,7 +778,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       return;
     }
 
-    target_cdeg = Ctrl_ReadU16(payload);
+    target_cdeg = Step42Slave_ReadU16(payload);
     if (target_cdeg > 36000U)
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
@@ -893,8 +806,8 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       return;
     }
 
-    speed = Ctrl_ReadI16(payload);
-    accel = Ctrl_ReadU16(payload + 2U);
+    speed = Step42Slave_ReadI16(payload);
+    accel = Step42Slave_ReadU16(payload + 2U);
     if ((speed < -5000) || (speed > 5000) || (accel == 0U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
@@ -920,11 +833,11 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       return;
     }
 
-    kp_x100 = Ctrl_ReadI16(payload);
-    ki_x100 = Ctrl_ReadI16(payload + 2U);
-    kd_x100 = Ctrl_ReadI16(payload + 4U);
-    limit = Ctrl_ReadU16(payload + 6U);
-    dead_x1000 = Ctrl_ReadU16(payload + 8U);
+    kp_x100 = Step42Slave_ReadI16(payload);
+    ki_x100 = Step42Slave_ReadI16(payload + 2U);
+    kd_x100 = Step42Slave_ReadI16(payload + 4U);
+    limit = Step42Slave_ReadU16(payload + 6U);
+    dead_x1000 = Step42Slave_ReadU16(payload + 8U);
     if ((limit < 1U) || (dead_x1000 > 10000U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
@@ -1002,78 +915,13 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
   Ctrl_SendStatus(cmd, seq, CTRL_STATUS_UNKNOWN_CMD);
 }
 
-static uint8_t Ctrl_ProcessRxByte(uint8_t ch)
+static void Ctrl_ProcessRxByte(uint8_t ch)
 {
-  uint8_t crc_buf[CTRL_MAX_PAYLOAD + 3U];
-  uint8_t crc;
+  Step42Slave_Frame_t frame;
 
-  switch (ctrl_rx_state)
+  if (Step42Slave_ProcessByte(&ctrl_parser, ch, &frame) != 0U)
   {
-  case 0:
-    if (ch == CTRL_SOF1)
-    {
-      ctrl_rx_state = 1U;
-      return 1U;
-    }
-    return 0U;
-
-  case 1:
-    if (ch == CTRL_SOF2)
-    {
-      ctrl_rx_state = 2U;
-      return 1U;
-    }
-    ctrl_rx_state = 0U;
-    return 1U;
-
-  case 2:
-    ctrl_rx_len = ch;
-    ctrl_rx_index = 0U;
-    if (ctrl_rx_len > CTRL_MAX_PAYLOAD)
-    {
-      ctrl_rx_state = 0U;
-      return 1U;
-    }
-    ctrl_rx_state = 3U;
-    return 1U;
-
-  case 3:
-    ctrl_rx_cmd = ch;
-    ctrl_rx_state = 4U;
-    return 1U;
-
-  case 4:
-    ctrl_rx_seq = ch;
-    ctrl_rx_state = (ctrl_rx_len == 0U) ? 6U : 5U;
-    return 1U;
-
-  case 5:
-    ctrl_rx_payload[ctrl_rx_index++] = ch;
-    if (ctrl_rx_index >= ctrl_rx_len)
-    {
-      ctrl_rx_state = 6U;
-    }
-    return 1U;
-
-  case 6:
-    crc_buf[0] = ctrl_rx_len;
-    crc_buf[1] = ctrl_rx_cmd;
-    crc_buf[2] = ctrl_rx_seq;
-    for (uint8_t i = 0; i < ctrl_rx_len; i++)
-    {
-      crc_buf[3U + i] = ctrl_rx_payload[i];
-    }
-    crc = Ctrl_Crc8(crc_buf, (uint8_t)(ctrl_rx_len + 3U));
-    if (crc == ch)
-    {
-      Ctrl_ProcessFrame(ctrl_rx_cmd, ctrl_rx_seq, ctrl_rx_payload, ctrl_rx_len);
-    }
-    ctrl_rx_state = 0U;
-    return 1U;
-
-  default:
-    ctrl_rx_state = 0U;
-    return 1U;
+    Ctrl_ProcessFrame(frame.cmd, frame.seq, frame.payload, frame.len);
   }
 }
 
@@ -1219,7 +1067,7 @@ static void Debug_ProcessLine(char *line)
 static void Debug_ProcessRxByte(uint8_t ch)
 {
   debug_rx_count++;
-  (void)Ctrl_ProcessRxByte(ch);
+  Ctrl_ProcessRxByte(ch);
 }
 
 static void Debug_ProcessRx(void)
@@ -1294,6 +1142,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   DWT_Init();
   MT6701_Init();
+  Step42Slave_ParserInit(&ctrl_parser);
 
   led_red_off;
   led_blue_off;
