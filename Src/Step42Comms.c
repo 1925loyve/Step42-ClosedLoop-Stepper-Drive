@@ -127,10 +127,6 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     }
 
     target_angle = ((float)target_cdeg) / 100.0f;
-    if (target_angle >= 360.0f)
-    {
-      target_angle = 0.0f;
-    }
     Step42Control_MoveToAngleByMode(target_angle);
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;

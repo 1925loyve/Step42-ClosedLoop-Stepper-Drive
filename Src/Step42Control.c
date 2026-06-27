@@ -129,18 +129,31 @@ static float MT6701_UpdateUnwrappedDeg(uint16_t raw_angle)
   return mt6701_unwrapped_deg;
 }
 
+static float MapAngleToCurrentCycle(float target_angle)
+{
+  float cycle_start;
+
+  if (target_angle >= 360.0f)
+  {
+    target_angle = 360.0f;
+  }
+  else if (target_angle < 0.0f)
+  {
+    target_angle = 0.0f;
+  }
+
+  cycle_start = mt6701_unwrapped_deg - mt6701_angle_deg;
+  return cycle_start + target_angle;
+}
+
 static void Move_ToAbsoluteAngle(float target_angle)
 {
-  float move_delta;
-
-  move_delta = PID_AngleErrorDeg(target_angle, mt6701_angle_deg);
-
   if (motor_user_enabled == 0U)
   {
     Step42Control_SetUserEnable(1U);
   }
 
-  weak_pid_target_deg = mt6701_unwrapped_deg + move_delta;
+  weak_pid_target_deg = MapAngleToCurrentCycle(target_angle);
   PID_Reset(&weak_pid);
   weak_pid_enable = 1U;
   led_white_on;
@@ -148,11 +161,12 @@ static void Move_ToAbsoluteAngle(float target_angle)
 
 static void Move_ToOpenLoopAngle(float target_angle)
 {
-  float move_delta;
+  float target_unwrapped;
   int32_t steps;
 
-  move_delta = PID_AngleErrorDeg(target_angle, mt6701_angle_deg);
-  steps = (int32_t)((move_delta * MOTOR_STEPS_PER_REV / 360.0f) + ((move_delta >= 0.0f) ? 0.5f : -0.5f));
+  target_unwrapped = MapAngleToCurrentCycle(target_angle);
+  target_unwrapped -= mt6701_unwrapped_deg;
+  steps = (int32_t)((target_unwrapped * MOTOR_STEPS_PER_REV / 360.0f) + ((target_unwrapped >= 0.0f) ? 0.5f : -0.5f));
   if (steps == 0)
   {
     return;
