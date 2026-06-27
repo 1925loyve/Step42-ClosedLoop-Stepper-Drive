@@ -614,6 +614,36 @@
               <FileType>5</FileType>
               <FilePath>..\Src\Step42SlaveProtocol.h</FilePath>
             </File>
+            <File>
+              <FileName>Step42Control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\Step42Control.c</FilePath>
+            </File>
+            <File>
+              <FileName>Step42Control.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Src\Step42Control.h</FilePath>
+            </File>
+            <File>
+              <FileName>Step42Comms.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\Step42Comms.c</FilePath>
+            </File>
+            <File>
+              <FileName>Step42Comms.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Src\Step42Comms.h</FilePath>
+            </File>
+            <File>
+              <FileName>Step42App.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\Step42App.c</FilePath>
+            </File>
+            <File>
+              <FileName>Step42App.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Src\Step42App.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
