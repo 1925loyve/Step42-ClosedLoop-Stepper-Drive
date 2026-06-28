@@ -71,6 +71,18 @@ HOME_MODE_LABELS = {
 
 HOME_MODE_NAMES = {value: key for key, value in HOME_MODE_LABELS.items()}
 
+DEFAULT_MOTION_PARAMS = {
+    1: {"kp": 5.63, "ki": 0.01, "kd": 0.0, "limit": 5000, "deadband": 2.56, "accel": 94},
+    2: {"kp": 11.25, "ki": 0.01, "kd": 0.0, "limit": 5000, "deadband": 1.28, "accel": 188},
+    4: {"kp": 22.50, "ki": 0.03, "kd": 0.0, "limit": 5000, "deadband": 0.64, "accel": 375},
+    8: {"kp": 45.00, "ki": 0.05, "kd": 0.0, "limit": 5000, "deadband": 0.32, "accel": 750},
+    16: {"kp": 90.00, "ki": 0.10, "kd": 0.0, "limit": 5000, "deadband": 0.16, "accel": 1500},
+    32: {"kp": 180.00, "ki": 0.20, "kd": 0.0, "limit": 5000, "deadband": 0.08, "accel": 3000},
+    64: {"kp": 360.00, "ki": 0.40, "kd": 0.0, "limit": 5000, "deadband": 0.04, "accel": 6000},
+    128: {"kp": 720.00, "ki": 0.80, "kd": 0.0, "limit": 5000, "deadband": 0.02, "accel": 12000},
+    256: {"kp": 1440.00, "ki": 1.60, "kd": 0.0, "limit": 5000, "deadband": 0.01, "accel": 24000},
+}
+
 
 def crc8(data):
     crc = 0
@@ -339,7 +351,9 @@ class AngleViewer(tk.Tk):
         ttk.Combobox(mode, textvariable=self.mode_var, values=list(MODE_LABELS.keys()), width=12, state="readonly").pack(side=tk.LEFT, padx=(8, 8), pady=8)
         ttk.Button(mode, text="设置模式", command=self.send_mode).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Label(mode, text="细分").pack(side=tk.LEFT, padx=(0, 6), pady=8)
-        ttk.Combobox(mode, textvariable=self.microstep_var, values=["1", "2", "4", "8", "16", "32", "64", "128", "256"], width=6, state="readonly").pack(side=tk.LEFT, padx=(0, 8), pady=8)
+        self.microstep_combo = ttk.Combobox(mode, textvariable=self.microstep_var, values=["1", "2", "4", "8", "16", "32", "64", "128", "256"], width=6, state="readonly")
+        self.microstep_combo.pack(side=tk.LEFT, padx=(0, 8), pady=8)
+        self.microstep_combo.bind("<<ComboboxSelected>>", self._on_microstep_selected)
         ttk.Button(mode, text="设置细分", command=self.send_microstep).pack(side=tk.LEFT, padx=(0, 12), pady=8)
 
         drive = ttk.Frame(left)
@@ -402,6 +416,7 @@ class AngleViewer(tk.Tk):
             ttk.Entry(pid, textvariable=var, width=10).grid(row=row, column=col + 1, padx=(0, 10), pady=8, sticky=tk.W)
         ttk.Button(pid, text="写入PID", command=self.send_pid_values).grid(row=0, column=6, padx=(0, 8), pady=8, sticky=tk.W)
         ttk.Button(pid, text="写入加速度", command=self.send_closed_accel).grid(row=1, column=6, padx=(0, 8), pady=8, sticky=tk.W)
+        ttk.Button(pid, text="填入默认参数", command=self.fill_default_motion_params).grid(row=2, column=6, padx=(0, 8), pady=(0, 8), sticky=tk.W)
         ttk.Label(pid, textvariable=self.pid_status_var).grid(row=2, column=0, columnspan=6, padx=8, pady=(0, 8), sticky=tk.W)
         ttk.Label(pid, textvariable=self.closed_accel_status_var).grid(row=3, column=0, columnspan=6, padx=8, pady=(0, 8), sticky=tk.W)
 
@@ -478,7 +493,37 @@ class AngleViewer(tk.Tk):
             self.microstep_status_var.set("细分：只支持 1/2/4/8/16/32/64/128/256")
             return
         if self._send(CMD_MICROSTEP, struct.pack("<H", microsteps)):
-            self.microstep_status_var.set(f"细分：已发送 {microsteps}")
+            self.fill_default_motion_params(show_status=False)
+            self.microstep_status_var.set(f"细分：已发送 {microsteps}，已填入默认参数")
+
+    def _on_microstep_selected(self, _event=None):
+        self.fill_default_motion_params()
+
+    def fill_default_motion_params(self, show_status=True):
+        try:
+            microsteps = int(self.microstep_var.get())
+        except ValueError:
+            if show_status:
+                self.pid_status_var.set("PID：细分不是有效数字")
+            return
+        params = DEFAULT_MOTION_PARAMS.get(microsteps)
+        if params is None:
+            if show_status:
+                self.pid_status_var.set("PID：当前细分没有默认参数")
+            return
+
+        self.kp_var.set(f"{params['kp']:.2f}")
+        self.ki_var.set(f"{params['ki']:.2f}")
+        self.kd_var.set(f"{params['kd']:.2f}")
+        self.limit_var.set(str(params["limit"]))
+        self.deadband_var.set(f"{params['deadband']:.2f}")
+        self.closed_accel_var.set(str(params["accel"]))
+        if show_status:
+            self.pid_status_var.set(
+                f"PID：已填入 {microsteps} 细分默认 Kp={params['kp']:.2f}, Ki={params['ki']:.2f}, "
+                f"Kd={params['kd']:.2f}, Deadband={params['deadband']:.2f}"
+            )
+            self.closed_accel_status_var.set(f"闭环加速度：已填入默认 {params['accel']}")
 
     def send_closed_accel(self):
         try:
