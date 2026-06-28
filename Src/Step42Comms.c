@@ -43,12 +43,18 @@ static void Ctrl_SendStatus(uint8_t cmd, uint8_t seq, uint8_t status)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[10];
+  uint8_t resp[20];
   uint16_t angle_cdeg;
   int16_t pid_output;
+  float kp;
+  float ki;
+  float kd;
+  float pid_limit;
+  float deadband;
   float angle_deg = Step42Control_GetAngleDeg();
   float pid_output_steps = Step42Control_GetPidOutputSteps();
 
+  Step42Control_GetPositionPID(&kp, &ki, &kd, &pid_limit, &deadband);
   angle_cdeg = (uint16_t)(angle_deg * 100.0f + 0.5f);
   if (angle_cdeg >= 36000U)
   {
@@ -74,6 +80,11 @@ void Step42Comms_SendQuery(uint8_t seq)
   Step42Slave_WriteU16(resp, 4U, Step42Control_GetRawAngle());
   Step42Slave_WriteU16(resp, 6U, angle_cdeg);
   Step42Slave_WriteI16(resp, 8U, pid_output);
+  Step42Slave_WriteI16(resp, 10U, (int16_t)(kp * 100.0f));
+  Step42Slave_WriteI16(resp, 12U, (int16_t)(ki * 100.0f));
+  Step42Slave_WriteI16(resp, 14U, (int16_t)(kd * 100.0f));
+  Step42Slave_WriteU16(resp, 16U, (uint16_t)pid_limit);
+  Step42Slave_WriteU16(resp, 18U, (uint16_t)(deadband * 1000.0f));
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 

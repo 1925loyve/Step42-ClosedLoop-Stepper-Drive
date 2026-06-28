@@ -382,6 +382,30 @@ void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_lim
   PID_Init(&weak_pid, kp, ki, kd, 0.001f, output_limit, 20.0f, deadband);
 }
 
+void Step42Control_GetPositionPID(float *kp, float *ki, float *kd, float *output_limit, float *deadband)
+{
+  if (kp != 0)
+  {
+    *kp = weak_pid.kp;
+  }
+  if (ki != 0)
+  {
+    *ki = weak_pid.ki;
+  }
+  if (kd != 0)
+  {
+    *kd = weak_pid.kd;
+  }
+  if (output_limit != 0)
+  {
+    *output_limit = weak_pid.output_limit;
+  }
+  if (deadband != 0)
+  {
+    *deadband = weak_pid.deadband;
+  }
+}
+
 void Step42Control_HandleKey(int8_t key_flag)
 {
   switch (key_flag)

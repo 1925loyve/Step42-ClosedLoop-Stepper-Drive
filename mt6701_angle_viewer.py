@@ -19,7 +19,7 @@ BAUD_DEFAULT = 115200
 RAW_MAX = 16384.0
 RPM_WINDOW_SECONDS = 0.65
 RPM_DISPLAY_INTERVAL = 0.35
-WAVEFORM_HISTORY_SECONDS = 60.0
+WAVEFORM_HISTORY_SECONDS = 180.0
 WAVEFORM_PIXELS_PER_SECOND = 18
 
 REQ_SOF = b"\xA5\x5A"
@@ -196,8 +196,8 @@ class AngleViewer(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Step42 二进制协议调试")
-        self.geometry("960x620")
-        self.minsize(900, 560)
+        self.geometry("1060x720")
+        self.minsize(960, 640)
 
         self.frame_queue = queue.Queue()
         self.status_queue = queue.Queue()
@@ -212,7 +212,8 @@ class AngleViewer(tk.Tk):
         self.current_angle_deg = None
         self.target_angle_deg = None
         self.wave_history = deque()
-        self.wave_enabled_var = tk.BooleanVar(value=True)
+        self.wave_pixels_per_second = WAVEFORM_PIXELS_PER_SECOND
+        self.wave_paused_var = tk.BooleanVar(value=False)
         self.wave_follow_var = tk.BooleanVar(value=True)
 
         self.port_var = tk.StringVar()
@@ -330,16 +331,18 @@ class AngleViewer(tk.Tk):
         wave.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
         wave_toolbar = ttk.Frame(wave)
         wave_toolbar.pack(fill=tk.X, padx=8, pady=(8, 4))
-        ttk.Checkbutton(wave_toolbar, text="显示波形", variable=self.wave_enabled_var, command=self._redraw_waveform).pack(side=tk.LEFT)
+        ttk.Checkbutton(wave_toolbar, text="暂停波形", variable=self.wave_paused_var).pack(side=tk.LEFT)
         ttk.Checkbutton(wave_toolbar, text="跟随最新", variable=self.wave_follow_var).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(wave_toolbar, text="放大", command=lambda: self.zoom_waveform(1.35)).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(wave_toolbar, text="缩小", command=lambda: self.zoom_waveform(1.0 / 1.35)).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(wave_toolbar, text="清空波形", command=self.clear_waveform).pack(side=tk.LEFT, padx=(12, 0))
-        ttk.Label(wave_toolbar, text="蓝色=current，橙色=target，范围 0~360°").pack(side=tk.LEFT, padx=(16, 0))
+        ttk.Label(wave_toolbar, text="蓝色=current，橙色=target，拖动滚动条可回看").pack(side=tk.LEFT, padx=(16, 0))
 
         canvas_wrap = ttk.Frame(wave)
         canvas_wrap.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
         self.wave_canvas = tk.Canvas(canvas_wrap, height=180, bg="#101418", highlightthickness=1, highlightbackground="#34404a")
         self.wave_canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.wave_scroll = ttk.Scrollbar(canvas_wrap, orient=tk.HORIZONTAL, command=self.wave_canvas.xview)
+        self.wave_scroll = ttk.Scrollbar(canvas_wrap, orient=tk.HORIZONTAL, command=self._wave_xview)
         self.wave_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.wave_canvas.configure(xscrollcommand=self.wave_scroll.set)
         self.wave_canvas.bind("<Configure>", lambda _event: self._redraw_waveform())
@@ -413,13 +416,23 @@ class AngleViewer(tk.Tk):
         except ValueError:
             self.pid_status_var.set("PID：参数不是有效数字")
             return
+        kp_i = int(round(kp * 100))
+        ki_i = int(round(ki * 100))
+        kd_i = int(round(kd * 100))
+        dead_i = int(round(deadband * 1000))
+        if not (-32768 <= kp_i <= 32767 and -32768 <= ki_i <= 32767 and -32768 <= kd_i <= 32767):
+            self.pid_status_var.set("PID：Kp/Ki/Kd 超范围，缩放后必须在 int16 内")
+            return
+        if not (1 <= limit <= 65535 and 0 <= dead_i <= 10000):
+            self.pid_status_var.set("PID：Limit 或 Deadband 超范围")
+            return
         payload = struct.pack(
             "<hhhHH",
-            int(round(kp * 100)),
-            int(round(ki * 100)),
-            int(round(kd * 100)),
+            kp_i,
+            ki_i,
+            kd_i,
             limit,
-            int(round(deadband * 1000)),
+            dead_i,
         )
         if self._send(CMD_PID, payload):
             self.pid_status_var.set("PID：已发送写入")
@@ -482,7 +495,11 @@ class AngleViewer(tk.Tk):
     def _process_frame(self, cmd, seq, payload):
         if cmd == CMD_QUERY and len(payload) >= 10:
             status, enabled, stream, mode, raw, angle_cdeg, pid_output = struct.unpack("<BBBBHHh", payload[:10])
-            self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0, pid_output)
+            pid_params = None
+            if len(payload) >= 20:
+                kp_i, ki_i, kd_i, limit, dead_i = struct.unpack("<hhhHH", payload[10:20])
+                pid_params = (kp_i / 100.0, ki_i / 100.0, kd_i / 100.0, limit, dead_i / 1000.0)
+            self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0, pid_output, pid_params)
             return
         if payload:
             status = payload[0]
@@ -503,7 +520,7 @@ class AngleViewer(tk.Tk):
                 self.speed_status_var.set(f"停止：{text}")
         self._send(CMD_QUERY)
 
-    def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output):
+    def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output, pid_params=None):
         now = time.monotonic()
         rpm = self._calc_rpm(raw, now)
         self.current_angle_deg = deg
@@ -516,6 +533,11 @@ class AngleViewer(tk.Tk):
         self.enable_status_var.set("电机：已使能" if enabled else "电机：已失能")
         self.stream_status_var.set("数据流：开启" if stream else "数据流：关闭")
         self.mode_status_var.set(f"模式：{MODE_NAMES.get(mode, '未知')}")
+        if pid_params is not None:
+            kp, ki, kd, limit, deadband = pid_params
+            self.pid_status_var.set(
+                f"PID：当前 Kp={kp:.2f}, Ki={ki:.2f}, Kd={kd:.2f}, Limit={limit}, Deadband={deadband:.3f}"
+            )
         if status != 0:
             self.status_var.set(f"设备状态错误：{status}")
 
@@ -566,15 +588,24 @@ class AngleViewer(tk.Tk):
         self.wave_history.clear()
         self._redraw_waveform()
 
+    def zoom_waveform(self, scale):
+        self.wave_pixels_per_second = max(5.0, min(180.0, self.wave_pixels_per_second * scale))
+        self._redraw_waveform()
+
+    def _wave_xview(self, *args):
+        self.wave_follow_var.set(False)
+        self.wave_canvas.xview(*args)
+
     def _append_wave_sample(self, now):
         if self.current_angle_deg is None and self.target_angle_deg is None:
+            return
+        if self.wave_paused_var.get():
             return
 
         self.wave_history.append((now, self.current_angle_deg, self.target_angle_deg))
         while self.wave_history and (now - self.wave_history[0][0]) > WAVEFORM_HISTORY_SECONDS:
             self.wave_history.popleft()
-        if self.wave_enabled_var.get():
-            self._redraw_waveform()
+        self._redraw_waveform()
 
     def _angle_to_y(self, angle, top, height):
         angle = max(0.0, min(360.0, float(angle)))
@@ -593,11 +624,6 @@ class AngleViewer(tk.Tk):
         top = 14
         graph_h = height - 42
 
-        if not self.wave_enabled_var.get():
-            canvas.configure(scrollregion=(0, 0, width, height))
-            canvas.create_text(width / 2, height / 2, text="波形显示已关闭", fill="#b7c0c7", font=("Segoe UI", 12))
-            return
-
         history = list(self.wave_history)
         if len(history) == 0:
             canvas.configure(scrollregion=(0, 0, width, height))
@@ -606,7 +632,7 @@ class AngleViewer(tk.Tk):
 
         start_t = history[0][0]
         end_t = max(history[-1][0], start_t + 1.0)
-        graph_w = max(width - left - right_pad, int((end_t - start_t) * WAVEFORM_PIXELS_PER_SECOND) + 80)
+        graph_w = max(width - left - right_pad, int((end_t - start_t) * self.wave_pixels_per_second) + 80)
         total_w = left + graph_w + right_pad
         canvas.configure(scrollregion=(0, 0, total_w, height))
 
@@ -628,7 +654,7 @@ class AngleViewer(tk.Tk):
                 if value is None:
                     continue
                 last_value = value
-                x = left + (t - start_t) * WAVEFORM_PIXELS_PER_SECOND
+                x = left + (t - start_t) * self.wave_pixels_per_second
                 y = self._angle_to_y(value, top, graph_h)
                 points.extend((x, y))
             return points

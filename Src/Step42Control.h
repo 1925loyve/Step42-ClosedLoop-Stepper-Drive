@@ -19,6 +19,7 @@ void Step42Control_MoveToAngleByMode(float target_angle);
 void Step42Control_RunSpeedByMode(float speed, float accel);
 void Step42Control_StopMotion(void);
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband);
+void Step42Control_GetPositionPID(float *kp, float *ki, float *kd, float *output_limit, float *deadband);
 void Step42Control_HandleKey(int8_t key_flag);
 uint8_t Step42Control_TimerTick1kHz(void);
 
