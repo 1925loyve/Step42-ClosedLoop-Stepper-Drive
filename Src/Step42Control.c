@@ -6,7 +6,7 @@
 
 #define WEAK_PID_OUTPUT_SIGN (1.0f)
 #define WEAK_PID_ACCEL_STEPS (3000.0f)
-#define MOTOR_STEPS_PER_REV (6400.0f)
+#define MOTOR_BASE_STEPS_PER_REV (200.0f)
 #define OPEN_POSITION_MAX_SPEED (2500.0f)
 #define OPEN_POSITION_ACCEL (5000.0f)
 
@@ -32,6 +32,8 @@ static float closed_speed_target_steps = 0.0f;
 static float closed_speed_feedback_steps = 0.0f;
 static uint8_t speed_feedback_valid = 0U;
 static float speed_last_unwrapped_deg = 0.0f;
+static uint16_t motor_microsteps = 32U;
+static float motor_steps_per_rev = 6400.0f;
 
 static float AbsF(float value)
 {
@@ -166,7 +168,7 @@ static void Move_ToOpenLoopAngle(float target_angle)
 
   target_unwrapped = MapAngleToCurrentCycle(target_angle);
   target_unwrapped -= mt6701_unwrapped_deg;
-  steps = (int32_t)((target_unwrapped * MOTOR_STEPS_PER_REV / 360.0f) + ((target_unwrapped >= 0.0f) ? 0.5f : -0.5f));
+  steps = (int32_t)((target_unwrapped * motor_steps_per_rev / 360.0f) + ((target_unwrapped >= 0.0f) ? 0.5f : -0.5f));
   if (steps == 0)
   {
     return;
@@ -249,8 +251,7 @@ static void ClosedSpeed_Update(void)
   float correction;
   float command_speed;
 
-  if ((control_mode != CTRL_MODE_CLOSED_SPEED) ||
-      (motor_user_enabled == 0U) ||
+  if ((motor_user_enabled == 0U) ||
       (AbsF(closed_speed_target_steps) < 1.0f) ||
       (speed_feedback_valid == 0U))
   {
@@ -312,7 +313,9 @@ void Step42Control_SetUserEnable(uint8_t enable)
 
 void Step42Control_SetMode(uint8_t mode)
 {
-  if (mode > CTRL_MODE_CLOSED_SPEED)
+  if ((mode != CTRL_MODE_OPEN_SPEED) &&
+      (mode != CTRL_MODE_OPEN_POSITION) &&
+      (mode != CTRL_MODE_CLOSED_POSITION))
   {
     return;
   }
@@ -338,35 +341,64 @@ void Step42Control_SetMode(uint8_t mode)
 
 void Step42Control_MoveToAngleByMode(float target_angle)
 {
-  if (control_mode == CTRL_MODE_OPEN_POSITION)
+  if (control_mode == CTRL_MODE_CLOSED_POSITION)
   {
-    Move_ToOpenLoopAngle(target_angle);
-  }
-  else
-  {
-    if (control_mode != CTRL_MODE_CLOSED_POSITION)
-    {
-      Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
-    }
     Move_ToAbsoluteAngle(target_angle);
   }
 }
 
+uint8_t Step42Control_MoveStepsByMode(int32_t steps, float speed, float accel)
+{
+  float delta_deg;
+
+  if (steps == 0)
+  {
+    return 0U;
+  }
+
+  if (control_mode == CTRL_MODE_OPEN_POSITION)
+  {
+    if (motor_user_enabled == 0U)
+    {
+      Step42Control_SetUserEnable(1U);
+    }
+    weak_pid_enable = 0U;
+    closed_speed_target_steps = 0.0f;
+    Motor_42.run_mode = MODE_POSITION;
+    Stepper_Set_Speed_Profile(&Motor_42, speed, accel);
+    Stepper_Move(&Motor_42, steps);
+    led_white_on;
+    return 1U;
+  }
+
+  if (control_mode == CTRL_MODE_CLOSED_POSITION)
+  {
+    if (motor_user_enabled == 0U)
+    {
+      Step42Control_SetUserEnable(1U);
+    }
+    delta_deg = ((float)steps) * 360.0f / motor_steps_per_rev;
+    weak_pid_target_deg = mt6701_unwrapped_deg + delta_deg;
+    PID_Reset(&weak_pid);
+    weak_pid_enable = 1U;
+    led_white_on;
+    (void)speed;
+    (void)accel;
+    return 1U;
+  }
+
+  return 0U;
+}
+
 void Step42Control_RunSpeedByMode(float speed, float accel)
 {
-  if (control_mode == CTRL_MODE_CLOSED_SPEED)
+  if (control_mode != CTRL_MODE_OPEN_SPEED)
   {
-    ClosedSpeed_Run(speed, accel);
+    return;
   }
-  else
-  {
-    if (control_mode != CTRL_MODE_OPEN_SPEED)
-    {
-      Step42Control_SetMode(CTRL_MODE_OPEN_SPEED);
-    }
-    Motor_42.run_mode = MODE_SPEED;
-    OpenLoop_RunSpeed(speed, accel);
-  }
+
+  Motor_42.run_mode = MODE_SPEED;
+  OpenLoop_RunSpeed(speed, accel);
 }
 
 void Step42Control_StopMotion(void)
@@ -375,6 +407,35 @@ void Step42Control_StopMotion(void)
   closed_speed_target_steps = 0.0f;
   Stepper_ForceStopPosition(&Motor_42);
   led_white_off;
+}
+
+uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
+{
+  switch (microsteps)
+  {
+  case 1:
+  case 2:
+  case 4:
+  case 8:
+  case 16:
+  case 32:
+  case 64:
+  case 128:
+  case 256:
+    break;
+  default:
+    return 0U;
+  }
+
+  Step42Control_StopMotion();
+  if (Tmc2209_SetMicrosteps(microsteps) == 0U)
+  {
+    return 0U;
+  }
+
+  motor_microsteps = microsteps;
+  motor_steps_per_rev = MOTOR_BASE_STEPS_PER_REV * (float)motor_microsteps;
+  return 1U;
 }
 
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband)
@@ -459,11 +520,10 @@ uint8_t Step42Control_TimerTick1kHz(void)
     }
     else
     {
-      closed_speed_feedback_steps = (unwrapped_angle - speed_last_unwrapped_deg) * MOTOR_STEPS_PER_REV / 360.0f / 0.001f;
+      closed_speed_feedback_steps = (unwrapped_angle - speed_last_unwrapped_deg) * motor_steps_per_rev / 360.0f / 0.001f;
       speed_last_unwrapped_deg = unwrapped_angle;
     }
     WeakPID_Update(unwrapped_angle);
-    ClosedSpeed_Update();
   }
 
   return 1U;
@@ -477,6 +537,11 @@ uint8_t Step42Control_IsUserEnabled(void)
 uint8_t Step42Control_GetMode(void)
 {
   return control_mode;
+}
+
+uint16_t Step42Control_GetMicrosteps(void)
+{
+  return motor_microsteps;
 }
 
 uint16_t Step42Control_GetRawAngle(void)

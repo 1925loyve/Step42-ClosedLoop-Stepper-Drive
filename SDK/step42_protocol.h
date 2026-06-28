@@ -23,16 +23,18 @@ extern "C" {
 #define STEP42_CMD_QUERY            (0x07U)
 #define STEP42_CMD_MODE             (0x08U)
 #define STEP42_CMD_STOP             (0x09U)
+#define STEP42_CMD_MOVE_STEPS       (0x0AU)
+#define STEP42_CMD_MICROSTEP        (0x0BU)
 
 #define STEP42_STATUS_OK            (0x00U)
 #define STEP42_STATUS_BAD_LEN       (0x01U)
 #define STEP42_STATUS_RANGE         (0x02U)
 #define STEP42_STATUS_UNKNOWN_CMD   (0x03U)
+#define STEP42_STATUS_BAD_MODE      (0x04U)
 
 #define STEP42_MODE_OPEN_POSITION   (0x00U)
 #define STEP42_MODE_CLOSED_POSITION (0x01U)
 #define STEP42_MODE_OPEN_SPEED      (0x02U)
-#define STEP42_MODE_CLOSED_SPEED    (0x03U)
 
 typedef enum
 {
@@ -70,6 +72,12 @@ typedef struct
     uint16_t angle_cdeg;
     float angle_deg;
     int16_t pid_output;
+    float kp;
+    float ki;
+    float kd;
+    uint16_t pid_limit;
+    float deadband;
+    uint16_t microsteps;
 } Step42_Status;
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);
@@ -93,6 +101,13 @@ uint16_t Step42_BuildSetSpeed(uint8_t *buf,
                               uint8_t seq,
                               int16_t speed,
                               uint16_t accel);
+uint16_t Step42_BuildMoveSteps(uint8_t *buf,
+                               uint16_t max_len,
+                               uint8_t seq,
+                               int32_t steps,
+                               uint16_t speed,
+                               uint16_t accel);
+uint16_t Step42_BuildSetMicrosteps(uint8_t *buf, uint16_t max_len, uint8_t seq, uint16_t microsteps);
 uint16_t Step42_BuildSetPID(uint8_t *buf,
                             uint16_t max_len,
                             uint8_t seq,

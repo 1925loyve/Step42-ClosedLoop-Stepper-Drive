@@ -41,9 +41,17 @@ static void Ctrl_SendStatus(uint8_t cmd, uint8_t seq, uint8_t status)
   Ctrl_SendFrame(cmd, seq, payload, sizeof(payload));
 }
 
+static int32_t Ctrl_ReadI32(const uint8_t *payload)
+{
+  return (int32_t)((uint32_t)payload[0] |
+                   ((uint32_t)payload[1] << 8) |
+                   ((uint32_t)payload[2] << 16) |
+                   ((uint32_t)payload[3] << 24));
+}
+
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[20];
+  uint8_t resp[22];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -85,6 +93,7 @@ void Step42Comms_SendQuery(uint8_t seq)
   Step42Slave_WriteI16(resp, 14U, (int16_t)(kd * 100.0f));
   Step42Slave_WriteU16(resp, 16U, (uint16_t)pid_limit);
   Step42Slave_WriteU16(resp, 18U, (uint16_t)(deadband * 1000.0f));
+  Step42Slave_WriteU16(resp, 20U, Step42Control_GetMicrosteps());
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -137,6 +146,12 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       return;
     }
 
+    if (Step42Control_GetMode() != CTRL_MODE_CLOSED_POSITION)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
+      return;
+    }
+
     target_angle = ((float)target_cdeg) / 100.0f;
     Step42Control_MoveToAngleByMode(target_angle);
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
@@ -159,6 +174,11 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     if ((speed < -5000) || (speed > 5000) || (accel == 0U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    if (Step42Control_GetMode() != CTRL_MODE_OPEN_SPEED)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
       return;
     }
 
@@ -233,7 +253,9 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
-    if (payload[0] > CTRL_MODE_CLOSED_SPEED)
+    if ((payload[0] != CTRL_MODE_OPEN_SPEED) &&
+        (payload[0] != CTRL_MODE_OPEN_POSITION) &&
+        (payload[0] != CTRL_MODE_CLOSED_POSITION))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;
@@ -253,6 +275,66 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     }
 
     Step42Control_StopMotion();
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_MOVE_STEPS)
+  {
+    int32_t steps;
+    uint16_t speed;
+    uint16_t accel;
+    uint8_t mode;
+
+    if (len != 8U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+
+    steps = Ctrl_ReadI32(payload);
+    speed = Step42Slave_ReadU16(payload + 4U);
+    accel = Step42Slave_ReadU16(payload + 6U);
+    if ((steps == 0) || (speed == 0U) || (speed > 5000U) || (accel == 0U))
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+
+    mode = Step42Control_GetMode();
+    if ((mode != CTRL_MODE_OPEN_POSITION) && (mode != CTRL_MODE_CLOSED_POSITION))
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
+      return;
+    }
+
+    if (Step42Control_MoveStepsByMode(steps, (float)speed, (float)accel) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_MICROSTEP)
+  {
+    uint16_t microsteps;
+
+    if (len != 2U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+
+    microsteps = Step42Slave_ReadU16(payload);
+    if (Step42Control_SetMicrosteps(microsteps) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }

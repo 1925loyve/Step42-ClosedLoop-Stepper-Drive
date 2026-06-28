@@ -16,14 +16,56 @@ extern UART_HandleTypeDef huart1;
  * 3. VACTUAL     (0x22)  内部速度模式，这里固定为 0，不使用
  * 4. CHOPCONF    (0x6C)  细分/斩波核心配置
  */
-static const uint32_t TMC2209_GCONF_VALUE = 0x00000184;
+static const uint32_t TMC2209_GCONF_VALUE = 0x00000180;
 /*
  * CHOPCONF.MRES = 8 -> full-step external STEP input.
  * Change bits 24..27 to switch microstep resolution for precision tests.
  */
-static const uint32_t TMC2209_CHOPCONF_VALUE = 0x18000053;
+static const uint32_t TMC2209_CHOPCONF_VALUE = 0x13000053;
 static const uint32_t TMC2209_IHOLD_IRUN_VALUE = 0x00060C04;
 static const uint32_t TMC2209_VACTUAL_VALUE = 0x00000000;
+static uint8_t tmc2209_active_addr = 0U;
+
+static uint8_t TMC2209_MicrostepsToMres(uint16_t microsteps, uint8_t *mres)
+{
+    if (mres == 0)
+    {
+        return 0;
+    }
+
+    switch (microsteps)
+    {
+    case 256:
+        *mres = 0;
+        return 1;
+    case 128:
+        *mres = 1;
+        return 1;
+    case 64:
+        *mres = 2;
+        return 1;
+    case 32:
+        *mres = 3;
+        return 1;
+    case 16:
+        *mres = 4;
+        return 1;
+    case 8:
+        *mres = 5;
+        return 1;
+    case 4:
+        *mres = 6;
+        return 1;
+    case 2:
+        *mres = 7;
+        return 1;
+    case 1:
+        *mres = 8;
+        return 1;
+    default:
+        return 0;
+    }
+}
 
 static void TMC2209_UART_Clear(void)
 {
@@ -145,6 +187,7 @@ uint8_t TMC2209_ReadReg_Robust(uint8_t tmc_addr, uint8_t reg, uint32_t *val_out)
 
 uint8_t Tmc2209_Init(uint8_t tmc_addr)
 {
+    tmc2209_active_addr = tmc_addr;
     delay_ms(100);
     TMC2209_WriteReg(tmc_addr, TMC2209_GCONF, TMC2209_GCONF_VALUE);
     TMC2209_WriteReg(tmc_addr, TMC2209_CHOPCONF, TMC2209_CHOPCONF_VALUE);
@@ -178,6 +221,29 @@ uint8_t Tmc2209_Init(uint8_t tmc_addr)
     }
 
     return 0;
+}
+
+uint8_t Tmc2209_SetMicrosteps(uint16_t microsteps)
+{
+    uint8_t mres;
+    uint32_t chopconf;
+    uint32_t read_val = 0;
+
+    if (TMC2209_MicrostepsToMres(microsteps, &mres) == 0)
+    {
+        return 0;
+    }
+
+    chopconf = (TMC2209_CHOPCONF_VALUE & ~(0x0FUL << 24)) | (((uint32_t)mres) << 24);
+    TMC2209_WriteReg(tmc2209_active_addr, TMC2209_CHOPCONF, chopconf);
+    delay_ms(2);
+
+    if (TMC2209_ReadReg_Robust(tmc2209_active_addr, TMC2209_CHOPCONF, &read_val) == 0)
+    {
+        return 0;
+    }
+
+    return (((read_val >> 24) & 0x0FU) == mres) ? 1U : 0U;
 }
 
 uint8_t Tmc2209_InitAuto(uint8_t *detected_addr)

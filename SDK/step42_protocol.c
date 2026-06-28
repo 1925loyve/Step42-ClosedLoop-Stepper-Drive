@@ -11,6 +11,16 @@ static void Step42_WriteI16(uint8_t *buf, uint8_t index, int16_t value)
     Step42_WriteU16(buf, index, (uint16_t)value);
 }
 
+static void Step42_WriteI32(uint8_t *buf, uint8_t index, int32_t value)
+{
+    uint32_t raw = (uint32_t)value;
+
+    buf[index] = (uint8_t)(raw & 0xFFU);
+    buf[index + 1U] = (uint8_t)((raw >> 8) & 0xFFU);
+    buf[index + 2U] = (uint8_t)((raw >> 16) & 0xFFU);
+    buf[index + 3U] = (uint8_t)((raw >> 24) & 0xFFU);
+}
+
 static uint16_t Step42_ReadU16(const uint8_t *buf, uint8_t index)
 {
     return (uint16_t)buf[index] | ((uint16_t)buf[index + 1U] << 8);
@@ -282,6 +292,50 @@ uint16_t Step42_BuildSetSpeed(uint8_t *buf,
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_SPEED, seq, payload, sizeof(payload));
 }
 
+uint16_t Step42_BuildMoveSteps(uint8_t *buf,
+                               uint16_t max_len,
+                               uint8_t seq,
+                               int32_t steps,
+                               uint16_t speed,
+                               uint16_t accel)
+{
+    uint8_t payload[8];
+
+    if ((steps == 0) || (speed == 0U) || (speed > 5000U) || (accel == 0U))
+    {
+        return 0U;
+    }
+
+    Step42_WriteI32(payload, 0U, steps);
+    Step42_WriteU16(payload, 4U, speed);
+    Step42_WriteU16(payload, 6U, accel);
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_MOVE_STEPS, seq, payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildSetMicrosteps(uint8_t *buf, uint16_t max_len, uint8_t seq, uint16_t microsteps)
+{
+    uint8_t payload[2];
+
+    switch (microsteps)
+    {
+    case 1:
+    case 2:
+    case 4:
+    case 8:
+    case 16:
+    case 32:
+    case 64:
+    case 128:
+    case 256:
+        break;
+    default:
+        return 0U;
+    }
+
+    Step42_WriteU16(payload, 0U, microsteps);
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_MICROSTEP, seq, payload, sizeof(payload));
+}
+
 uint16_t Step42_BuildSetPID(uint8_t *buf,
                             uint16_t max_len,
                             uint8_t seq,
@@ -332,7 +386,9 @@ uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_
 {
     uint8_t payload[1];
 
-    if (mode > STEP42_MODE_CLOSED_SPEED)
+    if ((mode != STEP42_MODE_OPEN_SPEED) &&
+        (mode != STEP42_MODE_OPEN_POSITION) &&
+        (mode != STEP42_MODE_CLOSED_POSITION))
     {
         return 0U;
     }
@@ -375,5 +431,17 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->angle_cdeg = Step42_ReadU16(response->payload, 6U);
     status->angle_deg = ((float)status->angle_cdeg) / 100.0f;
     status->pid_output = Step42_ReadI16(response->payload, 8U);
+    if (response->len >= 20U)
+    {
+        status->kp = ((float)Step42_ReadI16(response->payload, 10U)) / 100.0f;
+        status->ki = ((float)Step42_ReadI16(response->payload, 12U)) / 100.0f;
+        status->kd = ((float)Step42_ReadI16(response->payload, 14U)) / 100.0f;
+        status->pid_limit = Step42_ReadU16(response->payload, 16U);
+        status->deadband = ((float)Step42_ReadU16(response->payload, 18U)) / 1000.0f;
+    }
+    if (response->len >= 22U)
+    {
+        status->microsteps = Step42_ReadU16(response->payload, 20U);
+    }
     return 0;
 }

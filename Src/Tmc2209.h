@@ -15,6 +15,7 @@
 
 uint8_t Tmc2209_Init(uint8_t tmc_addr);
 uint8_t Tmc2209_InitAuto(uint8_t *detected_addr);
+uint8_t Tmc2209_SetMicrosteps(uint16_t microsteps);
 
 
 #endif

@@ -21,16 +21,18 @@
 #define CTRL_CMD_QUERY (0x07U)
 #define CTRL_CMD_MODE (0x08U)
 #define CTRL_CMD_STOP (0x09U)
+#define CTRL_CMD_MOVE_STEPS (0x0AU)
+#define CTRL_CMD_MICROSTEP (0x0BU)
 
 #define CTRL_STATUS_OK (0x00U)
 #define CTRL_STATUS_BAD_LEN (0x01U)
 #define CTRL_STATUS_RANGE (0x02U)
 #define CTRL_STATUS_UNKNOWN_CMD (0x03U)
+#define CTRL_STATUS_BAD_MODE (0x04U)
 
 #define CTRL_MODE_OPEN_POSITION (0x00U)
 #define CTRL_MODE_CLOSED_POSITION (0x01U)
 #define CTRL_MODE_OPEN_SPEED (0x02U)
-#define CTRL_MODE_CLOSED_SPEED (0x03U)
 
 typedef struct
 {
@@ -67,4 +69,3 @@ void Step42Slave_WriteU16(uint8_t *payload, uint8_t index, uint16_t value);
 void Step42Slave_WriteI16(uint8_t *payload, uint8_t index, int16_t value);
 
 #endif
-
