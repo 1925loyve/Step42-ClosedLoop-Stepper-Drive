@@ -11,7 +11,7 @@ extern "C" {
 #define STEP42_SOF2                 (0x5AU)
 #define STEP42_RESP_SOF1            (0x5AU)
 #define STEP42_RESP_SOF2            (0xA5U)
-#define STEP42_MAX_PAYLOAD          (24U)
+#define STEP42_MAX_PAYLOAD          (32U)
 #define STEP42_MAX_FRAME_SIZE       (STEP42_MAX_PAYLOAD + 6U)
 
 #define STEP42_CMD_PING             (0x01U)
@@ -25,16 +25,25 @@ extern "C" {
 #define STEP42_CMD_STOP             (0x09U)
 #define STEP42_CMD_MOVE_STEPS       (0x0AU)
 #define STEP42_CMD_MICROSTEP        (0x0BU)
+#define STEP42_CMD_CLOSED_ACCEL     (0x0CU)
+#define STEP42_CMD_HOME_MODE        (0x0DU)
+#define STEP42_CMD_SET_ZERO         (0x0EU)
+#define STEP42_CMD_HOME             (0x0FU)
 
 #define STEP42_STATUS_OK            (0x00U)
 #define STEP42_STATUS_BAD_LEN       (0x01U)
 #define STEP42_STATUS_RANGE         (0x02U)
 #define STEP42_STATUS_UNKNOWN_CMD   (0x03U)
 #define STEP42_STATUS_BAD_MODE      (0x04U)
+#define STEP42_STATUS_BUSY          (0x05U)
 
 #define STEP42_MODE_OPEN_POSITION   (0x00U)
 #define STEP42_MODE_CLOSED_POSITION (0x01U)
 #define STEP42_MODE_OPEN_SPEED      (0x02U)
+
+#define STEP42_HOME_NEAREST         (0x00U)
+#define STEP42_HOME_POSITIVE        (0x01U)
+#define STEP42_HOME_NEGATIVE        (0x02U)
 
 typedef enum
 {
@@ -78,6 +87,9 @@ typedef struct
     uint16_t pid_limit;
     float deadband;
     uint16_t microsteps;
+    uint16_t closed_accel;
+    uint8_t zero_valid;
+    uint8_t home_mode;
 } Step42_Status;
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);
@@ -108,6 +120,10 @@ uint16_t Step42_BuildMoveSteps(uint8_t *buf,
                                uint16_t speed,
                                uint16_t accel);
 uint16_t Step42_BuildSetMicrosteps(uint8_t *buf, uint16_t max_len, uint8_t seq, uint16_t microsteps);
+uint16_t Step42_BuildSetClosedAccel(uint8_t *buf, uint16_t max_len, uint8_t seq, uint16_t accel);
+uint16_t Step42_BuildSetHomeMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode);
+uint16_t Step42_BuildSetZero(uint8_t *buf, uint16_t max_len, uint8_t seq);
+uint16_t Step42_BuildHome(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode);
 uint16_t Step42_BuildSetPID(uint8_t *buf,
                             uint16_t max_len,
                             uint8_t seq,

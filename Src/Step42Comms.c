@@ -49,9 +49,19 @@ static int32_t Ctrl_ReadI32(const uint8_t *payload)
                    ((uint32_t)payload[3] << 24));
 }
 
+static void Ctrl_WriteI32(uint8_t *payload, uint8_t index, int32_t value)
+{
+  uint32_t raw = (uint32_t)value;
+
+  payload[index] = (uint8_t)(raw & 0xFFU);
+  payload[index + 1U] = (uint8_t)((raw >> 8) & 0xFFU);
+  payload[index + 2U] = (uint8_t)((raw >> 16) & 0xFFU);
+  payload[index + 3U] = (uint8_t)((raw >> 24) & 0xFFU);
+}
+
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[22];
+  uint8_t resp[32];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -88,12 +98,15 @@ void Step42Comms_SendQuery(uint8_t seq)
   Step42Slave_WriteU16(resp, 4U, Step42Control_GetRawAngle());
   Step42Slave_WriteU16(resp, 6U, angle_cdeg);
   Step42Slave_WriteI16(resp, 8U, pid_output);
-  Step42Slave_WriteI16(resp, 10U, (int16_t)(kp * 100.0f));
-  Step42Slave_WriteI16(resp, 12U, (int16_t)(ki * 100.0f));
-  Step42Slave_WriteI16(resp, 14U, (int16_t)(kd * 100.0f));
-  Step42Slave_WriteU16(resp, 16U, (uint16_t)pid_limit);
-  Step42Slave_WriteU16(resp, 18U, (uint16_t)(deadband * 1000.0f));
-  Step42Slave_WriteU16(resp, 20U, Step42Control_GetMicrosteps());
+  Ctrl_WriteI32(resp, 10U, (int32_t)(kp * 100.0f));
+  Ctrl_WriteI32(resp, 14U, (int32_t)(ki * 100.0f));
+  Ctrl_WriteI32(resp, 18U, (int32_t)(kd * 100.0f));
+  Step42Slave_WriteU16(resp, 22U, (uint16_t)pid_limit);
+  Step42Slave_WriteU16(resp, 24U, (uint16_t)(deadband * 1000.0f));
+  Step42Slave_WriteU16(resp, 26U, Step42Control_GetMicrosteps());
+  Step42Slave_WriteU16(resp, 28U, (uint16_t)Step42Control_GetClosedAccel());
+  resp[30] = Step42Control_IsZeroValid();
+  resp[31] = Step42Control_GetHomeMode();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -189,23 +202,34 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
   if (cmd == CTRL_CMD_PID)
   {
-    int16_t kp_x100;
-    int16_t ki_x100;
-    int16_t kd_x100;
+    int32_t kp_x100;
+    int32_t ki_x100;
+    int32_t kd_x100;
     uint16_t limit;
     uint16_t dead_x1000;
 
-    if (len != 10U)
+    if ((len != 10U) && (len != 16U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
 
-    kp_x100 = Step42Slave_ReadI16(payload);
-    ki_x100 = Step42Slave_ReadI16(payload + 2U);
-    kd_x100 = Step42Slave_ReadI16(payload + 4U);
-    limit = Step42Slave_ReadU16(payload + 6U);
-    dead_x1000 = Step42Slave_ReadU16(payload + 8U);
+    if (len == 16U)
+    {
+      kp_x100 = Ctrl_ReadI32(payload);
+      ki_x100 = Ctrl_ReadI32(payload + 4U);
+      kd_x100 = Ctrl_ReadI32(payload + 8U);
+      limit = Step42Slave_ReadU16(payload + 12U);
+      dead_x1000 = Step42Slave_ReadU16(payload + 14U);
+    }
+    else
+    {
+      kp_x100 = Step42Slave_ReadI16(payload);
+      ki_x100 = Step42Slave_ReadI16(payload + 2U);
+      kd_x100 = Step42Slave_ReadI16(payload + 4U);
+      limit = Step42Slave_ReadU16(payload + 6U);
+      dead_x1000 = Step42Slave_ReadU16(payload + 8U);
+    }
     if ((limit < 1U) || (dead_x1000 > 10000U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
@@ -336,6 +360,74 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     }
 
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_CLOSED_ACCEL)
+  {
+    uint16_t accel;
+
+    if (len != 2U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+
+    accel = Step42Slave_ReadU16(payload);
+    if (Step42Control_SetClosedAccel((float)accel) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_HOME_MODE)
+  {
+    uint8_t status;
+
+    if (len != 1U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+
+    status = Step42Control_SetHomeMode(payload[0]);
+    Ctrl_SendStatus(cmd, seq, status);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_SET_ZERO)
+  {
+    uint8_t status;
+
+    if (len != 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+
+    status = Step42Control_SetCurrentZero();
+    Ctrl_SendStatus(cmd, seq, status);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_HOME)
+  {
+    uint8_t mode;
+    uint8_t status;
+
+    if (len > 1U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+
+    mode = (len == 1U) ? payload[0] : 0xFFU;
+    status = Step42Control_Home(mode);
+    Ctrl_SendStatus(cmd, seq, status);
     return;
   }
 

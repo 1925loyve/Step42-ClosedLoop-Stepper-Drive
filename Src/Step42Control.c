@@ -5,14 +5,52 @@
 #include "pid.h"
 
 #define WEAK_PID_OUTPUT_SIGN (1.0f)
-#define WEAK_PID_ACCEL_STEPS (3000.0f)
+#define DEFAULT_CLOSED_ACCEL_STEPS (3000.0f)
+#define WEAK_PID_ACCEL_STEPS DEFAULT_CLOSED_ACCEL_STEPS
 #define MOTOR_BASE_STEPS_PER_REV (200.0f)
 #define OPEN_POSITION_MAX_SPEED (2500.0f)
 #define OPEN_POSITION_ACCEL (5000.0f)
+#define STEP42_CFG_MAGIC (0x42323453UL)
+#define STEP42_CFG_VERSION (1UL)
+#define STEP42_CFG_ADDR (FLASH_BASE + FLASH_SIZE - FLASH_PAGE_SIZE)
+#define STEP42_CFG_FLASH_PAGE (FLASH_PAGE_NB - 1U)
+#define STEP42_FLASH_WRITE_GUARD_MS (2000UL)
 
 extern TIM_HandleTypeDef htim1;
 
 Stepper_t Motor_42;
+
+typedef struct
+{
+  uint16_t microsteps;
+  float kp;
+  float ki;
+  float kd;
+  float deadband;
+  float accel;
+} Step42DefaultParam_t;
+
+typedef struct
+{
+  uint32_t magic;
+  uint32_t version;
+  uint32_t zero_valid;
+  int32_t zero_cdeg;
+  uint32_t home_mode;
+  uint32_t crc;
+} Step42FlashConfig_t;
+
+static const Step42DefaultParam_t default_params[] = {
+    {1U, 5.63f, 0.01f, 0.0f, 2.56f, 94.0f},
+    {2U, 11.25f, 0.01f, 0.0f, 1.28f, 188.0f},
+    {4U, 22.50f, 0.03f, 0.0f, 0.64f, 375.0f},
+    {8U, 45.00f, 0.05f, 0.0f, 0.32f, 750.0f},
+    {16U, 90.00f, 0.10f, 0.0f, 0.16f, 1500.0f},
+    {32U, 180.00f, 0.20f, 0.0f, 0.08f, 3000.0f},
+    {64U, 360.00f, 0.40f, 0.0f, 0.04f, 6000.0f},
+    {128U, 720.00f, 0.80f, 0.0f, 0.02f, 12000.0f},
+    {256U, 1440.00f, 1.60f, 0.0f, 0.01f, 24000.0f},
+};
 
 static volatile uint16_t mt6701_raw_angle = 0;
 static volatile MT6701_Status_t mt6701_status = MT6701_HAL_ERROR;
@@ -34,10 +72,145 @@ static uint8_t speed_feedback_valid = 0U;
 static float speed_last_unwrapped_deg = 0.0f;
 static uint16_t motor_microsteps = 32U;
 static float motor_steps_per_rev = 6400.0f;
+static float closed_position_accel = DEFAULT_CLOSED_ACCEL_STEPS;
+static float zero_offset_deg = 0.0f;
+static uint8_t zero_valid = 0U;
+static uint8_t home_mode = CTRL_HOME_NEAREST;
+static uint32_t last_flash_write_ms = 0U;
 
 static float AbsF(float value)
 {
   return (value >= 0.0f) ? value : -value;
+}
+
+static float Normalize360(float value)
+{
+  while (value >= 360.0f)
+  {
+    value -= 360.0f;
+  }
+  while (value < 0.0f)
+  {
+    value += 360.0f;
+  }
+  return value;
+}
+
+static uint32_t Config_CalcCrc(const Step42FlashConfig_t *cfg)
+{
+  const uint32_t *words = (const uint32_t *)cfg;
+  uint32_t crc = 0xA5A55A5AUL;
+  uint32_t count = (sizeof(Step42FlashConfig_t) / sizeof(uint32_t)) - 1U;
+  uint32_t i;
+
+  for (i = 0U; i < count; i++)
+  {
+    crc ^= words[i] + 0x9E3779B9UL + (crc << 6) + (crc >> 2);
+  }
+
+  return crc;
+}
+
+static void Config_Load(void)
+{
+  const Step42FlashConfig_t *cfg = (const Step42FlashConfig_t *)STEP42_CFG_ADDR;
+
+  if ((cfg->magic != STEP42_CFG_MAGIC) ||
+      (cfg->version != STEP42_CFG_VERSION) ||
+      (cfg->crc != Config_CalcCrc(cfg)))
+  {
+    zero_valid = 0U;
+    zero_offset_deg = 0.0f;
+    home_mode = CTRL_HOME_NEAREST;
+    return;
+  }
+
+  zero_valid = (cfg->zero_valid != 0UL) ? 1U : 0U;
+  zero_offset_deg = Normalize360(((float)cfg->zero_cdeg) / 100.0f);
+  if (cfg->home_mode <= CTRL_HOME_NEGATIVE)
+  {
+    home_mode = (uint8_t)cfg->home_mode;
+  }
+  else
+  {
+    home_mode = CTRL_HOME_NEAREST;
+  }
+}
+
+static uint8_t Config_Save(void)
+{
+  union
+  {
+    Step42FlashConfig_t cfg;
+    uint64_t words[sizeof(Step42FlashConfig_t) / sizeof(uint64_t)];
+  } image;
+  FLASH_EraseInitTypeDef erase;
+  uint32_t page_error = 0U;
+  uint32_t address = STEP42_CFG_ADDR;
+  uint32_t i;
+
+  if ((last_flash_write_ms != 0U) &&
+      ((uint32_t)(HAL_GetTick() - last_flash_write_ms) < STEP42_FLASH_WRITE_GUARD_MS))
+  {
+    return CTRL_STATUS_BUSY;
+  }
+
+  image.cfg.magic = STEP42_CFG_MAGIC;
+  image.cfg.version = STEP42_CFG_VERSION;
+  image.cfg.zero_valid = zero_valid;
+  image.cfg.zero_cdeg = (int32_t)(zero_offset_deg * 100.0f + 0.5f);
+  image.cfg.home_mode = home_mode;
+  image.cfg.crc = Config_CalcCrc(&image.cfg);
+
+  Step42Control_StopMotion();
+  HAL_FLASH_Unlock();
+
+  erase.TypeErase = FLASH_TYPEERASE_PAGES;
+  erase.Banks = FLASH_BANK_1;
+  erase.Page = STEP42_CFG_FLASH_PAGE;
+  erase.NbPages = 1U;
+  if (HAL_FLASHEx_Erase(&erase, &page_error) != HAL_OK)
+  {
+    HAL_FLASH_Lock();
+    return CTRL_STATUS_RANGE;
+  }
+
+  for (i = 0U; i < (sizeof(Step42FlashConfig_t) / sizeof(uint64_t)); i++)
+  {
+    if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, address, image.words[i]) != HAL_OK)
+    {
+      HAL_FLASH_Lock();
+      return CTRL_STATUS_RANGE;
+    }
+    address += 8U;
+  }
+
+  HAL_FLASH_Lock();
+  last_flash_write_ms = HAL_GetTick();
+  return CTRL_STATUS_OK;
+}
+
+static const Step42DefaultParam_t *DefaultParams_Find(uint16_t microsteps)
+{
+  uint32_t i;
+
+  for (i = 0U; i < (sizeof(default_params) / sizeof(default_params[0])); i++)
+  {
+    if (default_params[i].microsteps == microsteps)
+    {
+      return &default_params[i];
+    }
+  }
+
+  return &default_params[5];
+}
+
+static void ApplyDefaultParams(uint16_t microsteps)
+{
+  const Step42DefaultParam_t *params = DefaultParams_Find(microsteps);
+
+  closed_position_accel = params->accel;
+  PID_Init(&weak_pid, params->kp, params->ki, params->kd, 0.001f, 5000.0f, 20.0f, params->deadband);
 }
 
 static void Stepper_ForceStopPosition(Stepper_t *stepper)
@@ -97,7 +270,7 @@ static void WeakPID_Update(float current_angle)
     Stepper_Stop(&Motor_42);
   }
 
-  Stepper_Set_Speed_Profile(&Motor_42, output, WEAK_PID_ACCEL_STEPS);
+  Stepper_Set_Speed_Profile(&Motor_42, output, closed_position_accel);
   if (Motor_42.state == STOP)
   {
     Stepper_Run_Speed(&Motor_42);
@@ -107,11 +280,13 @@ static void WeakPID_Update(float current_angle)
 static float MT6701_UpdateUnwrappedDeg(uint16_t raw_angle)
 {
   int32_t delta_raw;
+  float physical_angle;
 
   if (mt6701_unwrap_valid == 0U)
   {
     mt6701_last_raw = raw_angle;
-    mt6701_unwrapped_deg = PID_RawToDeg(raw_angle);
+    physical_angle = PID_RawToDeg(raw_angle);
+    mt6701_unwrapped_deg = Normalize360(physical_angle - zero_offset_deg);
     mt6701_unwrap_valid = 1U;
     return mt6701_unwrapped_deg;
   }
@@ -279,7 +454,9 @@ static void ClosedSpeed_Update(void)
 void Step42Control_Init(void)
 {
   Stepper_Init(&Motor_42, &htim1, TIM_CHANNEL_1, tmc_DIR_GPIO_Port, tmc_DIR_Pin, MODE_SPEED);
-  PID_Init(&weak_pid, 180.0f, 0.2f, 0.0f, 0.001f, 5000.0f, 20.0f, 0.08f);
+  Config_Load();
+  ApplyDefaultParams(motor_microsteps);
+  Tmc2209_SetMicrosteps(motor_microsteps);
   PID_Init(&speed_pid, 0.25f, 1.0f, 0.0f, 0.001f, 1500.0f, 1000.0f, 5.0f);
   Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_UNEN);
 }
@@ -409,6 +586,17 @@ void Step42Control_StopMotion(void)
   led_white_off;
 }
 
+uint8_t Step42Control_SetClosedAccel(float accel)
+{
+  if ((accel < 1.0f) || (accel > 65535.0f))
+  {
+    return 0U;
+  }
+
+  closed_position_accel = accel;
+  return 1U;
+}
+
 uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
 {
   switch (microsteps)
@@ -435,12 +623,102 @@ uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
 
   motor_microsteps = microsteps;
   motor_steps_per_rev = MOTOR_BASE_STEPS_PER_REV * (float)motor_microsteps;
+  ApplyDefaultParams(microsteps);
   return 1U;
 }
 
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband)
 {
   PID_Init(&weak_pid, kp, ki, kd, 0.001f, output_limit, 20.0f, deadband);
+}
+
+uint8_t Step42Control_SetHomeMode(uint8_t mode)
+{
+  uint8_t status;
+
+  if (mode > CTRL_HOME_NEGATIVE)
+  {
+    return CTRL_STATUS_RANGE;
+  }
+  if (home_mode == mode)
+  {
+    return CTRL_STATUS_OK;
+  }
+  if ((last_flash_write_ms != 0U) &&
+      ((uint32_t)(HAL_GetTick() - last_flash_write_ms) < STEP42_FLASH_WRITE_GUARD_MS))
+  {
+    return CTRL_STATUS_BUSY;
+  }
+
+  home_mode = mode;
+  status = Config_Save();
+  return status;
+}
+
+uint8_t Step42Control_SetCurrentZero(void)
+{
+  float new_offset = PID_RawToDeg(mt6701_raw_angle);
+
+  if ((zero_valid != 0U) && (AbsF(PID_AngleErrorDeg(new_offset, zero_offset_deg)) < 0.01f))
+  {
+    return CTRL_STATUS_OK;
+  }
+  if ((last_flash_write_ms != 0U) &&
+      ((uint32_t)(HAL_GetTick() - last_flash_write_ms) < STEP42_FLASH_WRITE_GUARD_MS))
+  {
+    return CTRL_STATUS_BUSY;
+  }
+
+  zero_offset_deg = new_offset;
+  zero_valid = 1U;
+  mt6701_angle_deg = 0.0f;
+  mt6701_unwrapped_deg = 0.0f;
+  mt6701_unwrap_valid = 0U;
+  weak_pid_target_deg = 0.0f;
+  PID_Reset(&weak_pid);
+  return Config_Save();
+}
+
+uint8_t Step42Control_Home(uint8_t mode)
+{
+  float delta;
+
+  if (mode > CTRL_HOME_NEGATIVE)
+  {
+    mode = home_mode;
+  }
+  if (control_mode != CTRL_MODE_CLOSED_POSITION)
+  {
+    return CTRL_STATUS_BAD_MODE;
+  }
+
+  if (mode == CTRL_HOME_NEAREST)
+  {
+    delta = PID_AngleErrorDeg(0.0f, mt6701_angle_deg);
+  }
+  else if (mode == CTRL_HOME_POSITIVE)
+  {
+    delta = 360.0f - mt6701_angle_deg;
+    if (delta >= 360.0f)
+    {
+      delta = 0.0f;
+    }
+  }
+  else
+  {
+    delta = -mt6701_angle_deg;
+  }
+
+  if (motor_user_enabled == 0U)
+  {
+    Step42Control_SetUserEnable(1U);
+  }
+
+  weak_pid_target_deg = mt6701_unwrapped_deg + delta;
+  PID_Reset(&weak_pid);
+  weak_pid_enable = 1U;
+  led_white_on;
+  return CTRL_STATUS_OK;
 }
 
 void Step42Control_GetPositionPID(float *kp, float *ki, float *kd, float *output_limit, float *deadband)
@@ -509,7 +787,7 @@ uint8_t Step42Control_TimerTick1kHz(void)
   }
 
   mt6701_raw_angle = raw_angle;
-  mt6701_angle_deg = PID_RawToDeg(raw_angle);
+  mt6701_angle_deg = Normalize360(PID_RawToDeg(raw_angle) - zero_offset_deg);
   {
     float unwrapped_angle = MT6701_UpdateUnwrappedDeg(raw_angle);
     if (speed_feedback_valid == 0U)
@@ -557,6 +835,21 @@ float Step42Control_GetAngleDeg(void)
 float Step42Control_GetPidOutputSteps(void)
 {
   return weak_pid_output_steps;
+}
+
+float Step42Control_GetClosedAccel(void)
+{
+  return closed_position_accel;
+}
+
+uint8_t Step42Control_GetHomeMode(void)
+{
+  return home_mode;
+}
+
+uint8_t Step42Control_IsZeroValid(void)
+{
+  return zero_valid;
 }
 
 MT6701_Status_t Step42Control_GetEncoderStatus(void)

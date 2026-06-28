@@ -31,6 +31,14 @@ static int16_t Step42_ReadI16(const uint8_t *buf, uint8_t index)
     return (int16_t)Step42_ReadU16(buf, index);
 }
 
+static int32_t Step42_ReadI32(const uint8_t *buf, uint8_t index)
+{
+    return (int32_t)((uint32_t)buf[index] |
+                     ((uint32_t)buf[index + 1U] << 8) |
+                     ((uint32_t)buf[index + 2U] << 16) |
+                     ((uint32_t)buf[index + 3U] << 24));
+}
+
 static uint16_t Step42_FloatToU16Scaled(float value, float scale)
 {
     float scaled = value * scale;
@@ -44,25 +52,6 @@ static uint16_t Step42_FloatToU16Scaled(float value, float scale)
         return 65535U;
     }
     return (uint16_t)(scaled + 0.5f);
-}
-
-static int16_t Step42_FloatToI16Scaled(float value, float scale)
-{
-    float scaled = value * scale;
-
-    if (scaled >= 32767.0f)
-    {
-        return 32767;
-    }
-    if (scaled <= -32768.0f)
-    {
-        return -32768;
-    }
-    if (scaled >= 0.0f)
-    {
-        return (int16_t)(scaled + 0.5f);
-    }
-    return (int16_t)(scaled - 0.5f);
 }
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len)
@@ -336,6 +325,50 @@ uint16_t Step42_BuildSetMicrosteps(uint8_t *buf, uint16_t max_len, uint8_t seq, 
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_MICROSTEP, seq, payload, sizeof(payload));
 }
 
+uint16_t Step42_BuildSetClosedAccel(uint8_t *buf, uint16_t max_len, uint8_t seq, uint16_t accel)
+{
+    uint8_t payload[2];
+
+    if (accel == 0U)
+    {
+        return 0U;
+    }
+
+    Step42_WriteU16(payload, 0U, accel);
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_CLOSED_ACCEL, seq, payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildSetHomeMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode)
+{
+    uint8_t payload[1];
+
+    if (mode > STEP42_HOME_NEGATIVE)
+    {
+        return 0U;
+    }
+
+    payload[0] = mode;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_HOME_MODE, seq, payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildSetZero(uint8_t *buf, uint16_t max_len, uint8_t seq)
+{
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_SET_ZERO, seq, 0, 0U);
+}
+
+uint16_t Step42_BuildHome(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode)
+{
+    uint8_t payload[1];
+
+    if (mode > STEP42_HOME_NEGATIVE)
+    {
+        return 0U;
+    }
+
+    payload[0] = mode;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_HOME, seq, payload, sizeof(payload));
+}
+
 uint16_t Step42_BuildSetPID(uint8_t *buf,
                             uint16_t max_len,
                             uint8_t seq,
@@ -345,10 +378,10 @@ uint16_t Step42_BuildSetPID(uint8_t *buf,
                             uint16_t limit,
                             float deadband)
 {
-    uint8_t payload[10];
-    int16_t kp_x100;
-    int16_t ki_x100;
-    int16_t kd_x100;
+    uint8_t payload[16];
+    int32_t kp_x100;
+    int32_t ki_x100;
+    int32_t kd_x100;
     uint16_t dead_x1000;
 
     if ((limit == 0U) || (deadband < 0.0f) || (deadband > 10.0f))
@@ -356,16 +389,16 @@ uint16_t Step42_BuildSetPID(uint8_t *buf,
         return 0U;
     }
 
-    kp_x100 = Step42_FloatToI16Scaled(kp, 100.0f);
-    ki_x100 = Step42_FloatToI16Scaled(ki, 100.0f);
-    kd_x100 = Step42_FloatToI16Scaled(kd, 100.0f);
+    kp_x100 = (int32_t)(kp * 100.0f);
+    ki_x100 = (int32_t)(ki * 100.0f);
+    kd_x100 = (int32_t)(kd * 100.0f);
     dead_x1000 = Step42_FloatToU16Scaled(deadband, 1000.0f);
 
-    Step42_WriteI16(payload, 0U, kp_x100);
-    Step42_WriteI16(payload, 2U, ki_x100);
-    Step42_WriteI16(payload, 4U, kd_x100);
-    Step42_WriteU16(payload, 6U, limit);
-    Step42_WriteU16(payload, 8U, dead_x1000);
+    Step42_WriteI32(payload, 0U, kp_x100);
+    Step42_WriteI32(payload, 4U, ki_x100);
+    Step42_WriteI32(payload, 8U, kd_x100);
+    Step42_WriteU16(payload, 12U, limit);
+    Step42_WriteU16(payload, 14U, dead_x1000);
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_PID, seq, payload, sizeof(payload));
 }
 
@@ -431,7 +464,19 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->angle_cdeg = Step42_ReadU16(response->payload, 6U);
     status->angle_deg = ((float)status->angle_cdeg) / 100.0f;
     status->pid_output = Step42_ReadI16(response->payload, 8U);
-    if (response->len >= 20U)
+    if (response->len >= 32U)
+    {
+        status->kp = ((float)Step42_ReadI32(response->payload, 10U)) / 100.0f;
+        status->ki = ((float)Step42_ReadI32(response->payload, 14U)) / 100.0f;
+        status->kd = ((float)Step42_ReadI32(response->payload, 18U)) / 100.0f;
+        status->pid_limit = Step42_ReadU16(response->payload, 22U);
+        status->deadband = ((float)Step42_ReadU16(response->payload, 24U)) / 1000.0f;
+        status->microsteps = Step42_ReadU16(response->payload, 26U);
+        status->closed_accel = Step42_ReadU16(response->payload, 28U);
+        status->zero_valid = response->payload[30];
+        status->home_mode = response->payload[31];
+    }
+    else if (response->len >= 20U)
     {
         status->kp = ((float)Step42_ReadI16(response->payload, 10U)) / 100.0f;
         status->ki = ((float)Step42_ReadI16(response->payload, 12U)) / 100.0f;

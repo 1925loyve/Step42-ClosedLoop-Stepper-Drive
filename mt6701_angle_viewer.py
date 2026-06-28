@@ -37,6 +37,10 @@ CMD_MODE = 0x08
 CMD_STOP = 0x09
 CMD_MOVE_STEPS = 0x0A
 CMD_MICROSTEP = 0x0B
+CMD_CLOSED_ACCEL = 0x0C
+CMD_HOME_MODE = 0x0D
+CMD_SET_ZERO = 0x0E
+CMD_HOME = 0x0F
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -56,7 +60,16 @@ STATUS_NAMES = {
     2: "参数超范围",
     3: "未知命令",
     4: "当前模式不支持",
+    5: "忙，请稍后再试",
 }
+
+HOME_MODE_LABELS = {
+    "就近回零": 0,
+    "正向无限位": 1,
+    "反向无限位": 2,
+}
+
+HOME_MODE_NAMES = {value: key for key, value in HOME_MODE_LABELS.items()}
 
 
 def crc8(data):
@@ -244,6 +257,10 @@ class AngleViewer(tk.Tk):
         self.kd_var = tk.StringVar(value="0.0")
         self.limit_var = tk.StringVar(value="5000")
         self.deadband_var = tk.StringVar(value="0.08")
+        self.closed_accel_var = tk.StringVar(value="3000")
+        self.closed_accel_status_var = tk.StringVar(value="闭环加速度：未知")
+        self.home_mode_var = tk.StringVar(value="就近回零")
+        self.home_status_var = tk.StringVar(value="零点：未知")
         self.target_angle_var = tk.StringVar(value="0.0")
         self.angle_status_var = tk.StringVar(value="角度：未发送")
         self.move_steps_var = tk.StringVar(value="3200")
@@ -348,14 +365,24 @@ class AngleViewer(tk.Tk):
         ttk.Button(angle, text="发送角度", command=self.send_angle_value).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Label(angle, textvariable=self.angle_status_var).pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
-        pid = ttk.LabelFrame(root, text="PID 参数")
+        zero = ttk.LabelFrame(root, text="零点 / 回零")
+        zero.pack(fill=tk.X, pady=(12, 0))
+        ttk.Combobox(zero, textvariable=self.home_mode_var, values=list(HOME_MODE_LABELS.keys()), width=12, state="readonly").pack(side=tk.LEFT, padx=(8, 8), pady=8)
+        ttk.Button(zero, text="设置回零模式", command=self.send_home_mode).pack(side=tk.LEFT, padx=(0, 12), pady=8)
+        ttk.Button(zero, text="当前位置设为零点", command=self.send_set_zero).pack(side=tk.LEFT, padx=(0, 12), pady=8)
+        ttk.Button(zero, text="回零", command=self.send_home).pack(side=tk.LEFT, padx=(0, 12), pady=8)
+        ttk.Label(zero, textvariable=self.home_status_var).pack(side=tk.LEFT, padx=(0, 8), pady=8)
+
+        pid = ttk.LabelFrame(root, text="闭环位置参数")
         pid.pack(fill=tk.X, pady=(12, 0))
-        labels = [("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var), ("Limit", self.limit_var), ("Deadband", self.deadband_var)]
+        labels = [("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var), ("Limit", self.limit_var), ("Deadband", self.deadband_var), ("Accel", self.closed_accel_var)]
         for i, (label, var) in enumerate(labels):
             ttk.Label(pid, text=label).grid(row=0, column=i * 2, padx=(8, 4), pady=8, sticky=tk.W)
             ttk.Entry(pid, textvariable=var, width=10).grid(row=0, column=i * 2 + 1, padx=(0, 10), pady=8)
-        ttk.Button(pid, text="写入PID", command=self.send_pid_values).grid(row=0, column=10, padx=(0, 8), pady=8)
-        ttk.Label(pid, textvariable=self.pid_status_var).grid(row=1, column=0, columnspan=11, padx=8, pady=(0, 8), sticky=tk.W)
+        ttk.Button(pid, text="写入PID", command=self.send_pid_values).grid(row=0, column=12, padx=(0, 8), pady=8)
+        ttk.Button(pid, text="写入加速度", command=self.send_closed_accel).grid(row=0, column=13, padx=(0, 8), pady=8)
+        ttk.Label(pid, textvariable=self.pid_status_var).grid(row=1, column=0, columnspan=9, padx=8, pady=(0, 8), sticky=tk.W)
+        ttk.Label(pid, textvariable=self.closed_accel_status_var).grid(row=1, column=9, columnspan=5, padx=8, pady=(0, 8), sticky=tk.W)
 
         wave = ttk.LabelFrame(root, text="目标/当前角度波形")
         wave.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
@@ -432,6 +459,37 @@ class AngleViewer(tk.Tk):
         if self._send(CMD_MICROSTEP, struct.pack("<H", microsteps)):
             self.microstep_status_var.set(f"细分：已发送 {microsteps}")
 
+    def send_closed_accel(self):
+        try:
+            accel = int(float(self.closed_accel_var.get()))
+        except ValueError:
+            self.closed_accel_status_var.set("闭环加速度：请输入有效数字")
+            return
+        if accel < 1 or accel > 65535:
+            self.closed_accel_status_var.set("闭环加速度：范围 1~65535")
+            return
+        if self._send(CMD_CLOSED_ACCEL, struct.pack("<H", accel)):
+            self.closed_accel_status_var.set(f"闭环加速度：已发送 {accel}")
+
+    def send_home_mode(self):
+        mode = HOME_MODE_LABELS.get(self.home_mode_var.get(), 0)
+        if self._send(CMD_HOME_MODE, struct.pack("<B", mode)):
+            self.home_status_var.set(f"回零模式：已发送 {self.home_mode_var.get()}")
+
+    def send_set_zero(self):
+        if self._send(CMD_SET_ZERO):
+            self.home_status_var.set("零点：已发送保存请求")
+
+    def send_home(self):
+        if self.current_mode != MODE_CLOSED_POSITION:
+            self.home_status_var.set("回零：当前不是闭环位置模式")
+            return
+        mode = HOME_MODE_LABELS.get(self.home_mode_var.get(), 0)
+        if self._send(CMD_HOME, struct.pack("<B", mode)):
+            self.target_angle_deg = 0.0
+            self._append_wave_sample(time.monotonic())
+            self.home_status_var.set(f"回零：已发送 {self.home_mode_var.get()}")
+
     def send_enable(self, enable):
         if self._send(CMD_ENABLE, struct.pack("<B", 1 if enable else 0)):
             self.enable_status_var.set("电机：已发送使能" if enable else "电机：已发送失能")
@@ -462,14 +520,14 @@ class AngleViewer(tk.Tk):
         ki_i = int(round(ki * 100))
         kd_i = int(round(kd * 100))
         dead_i = int(round(deadband * 1000))
-        if not (-32768 <= kp_i <= 32767 and -32768 <= ki_i <= 32767 and -32768 <= kd_i <= 32767):
-            self.pid_status_var.set("PID：Kp/Ki/Kd 超范围，缩放后必须在 int16 内")
+        if not (-2147483648 <= kp_i <= 2147483647 and -2147483648 <= ki_i <= 2147483647 and -2147483648 <= kd_i <= 2147483647):
+            self.pid_status_var.set("PID：Kp/Ki/Kd 超范围")
             return
         if not (1 <= limit <= 65535 and 0 <= dead_i <= 10000):
             self.pid_status_var.set("PID：Limit 或 Deadband 超范围")
             return
         payload = struct.pack(
-            "<hhhHH",
+            "<iiiHH",
             kp_i,
             ki_i,
             kd_i,
@@ -565,13 +623,24 @@ class AngleViewer(tk.Tk):
         if cmd == CMD_QUERY and len(payload) >= 10:
             status, enabled, stream, mode, raw, angle_cdeg, pid_output = struct.unpack("<BBBBHHh", payload[:10])
             pid_params = None
-            if len(payload) >= 20:
+            if len(payload) >= 32:
+                kp_i, ki_i, kd_i, limit, dead_i = struct.unpack("<iiiHH", payload[10:26])
+                pid_params = (kp_i / 100.0, ki_i / 100.0, kd_i / 100.0, limit, dead_i / 1000.0)
+            elif len(payload) >= 20:
                 kp_i, ki_i, kd_i, limit, dead_i = struct.unpack("<hhhHH", payload[10:20])
                 pid_params = (kp_i / 100.0, ki_i / 100.0, kd_i / 100.0, limit, dead_i / 1000.0)
             microsteps = None
-            if len(payload) >= 22:
+            closed_accel = None
+            zero_valid = None
+            home_mode = None
+            if len(payload) >= 32:
+                microsteps = struct.unpack("<H", payload[26:28])[0]
+                closed_accel = struct.unpack("<H", payload[28:30])[0]
+                zero_valid = payload[30]
+                home_mode = payload[31]
+            elif len(payload) >= 22:
                 microsteps = struct.unpack("<H", payload[20:22])[0]
-            self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0, pid_output, pid_params, microsteps)
+            self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0, pid_output, pid_params, microsteps, closed_accel, zero_valid, home_mode)
             return
         if payload:
             status = payload[0]
@@ -594,9 +663,17 @@ class AngleViewer(tk.Tk):
                 self.move_status_var.set(f"脉冲位置：{text}")
             elif cmd == CMD_MICROSTEP:
                 self.microstep_status_var.set(f"细分：{text}")
+            elif cmd == CMD_CLOSED_ACCEL:
+                self.closed_accel_status_var.set(f"闭环加速度：{text}")
+            elif cmd == CMD_HOME_MODE:
+                self.home_status_var.set(f"回零模式：{text}")
+            elif cmd == CMD_SET_ZERO:
+                self.home_status_var.set(f"设置零点：{text}")
+            elif cmd == CMD_HOME:
+                self.home_status_var.set(f"回零：{text}")
         self._send(CMD_QUERY)
 
-    def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output, pid_params=None, microsteps=None):
+    def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output, pid_params=None, microsteps=None, closed_accel=None, zero_valid=None, home_mode=None):
         now = time.monotonic()
         rpm = self._calc_rpm(raw, now)
         self.current_angle_deg = deg
@@ -612,6 +689,11 @@ class AngleViewer(tk.Tk):
         self.mode_status_var.set(f"模式：{MODE_NAMES.get(mode, '未知')}")
         if microsteps is not None:
             self.microstep_status_var.set(f"细分：当前 {microsteps}")
+        if closed_accel is not None:
+            self.closed_accel_status_var.set(f"闭环加速度：当前 {closed_accel}")
+        if zero_valid is not None:
+            home_text = HOME_MODE_NAMES.get(home_mode, "未知")
+            self.home_status_var.set(f"零点：{'已设置' if zero_valid else '未设置'}，回零模式：{home_text}")
         if pid_params is not None:
             kp, ki, kd, limit, deadband = pid_params
             self.pid_status_var.set(

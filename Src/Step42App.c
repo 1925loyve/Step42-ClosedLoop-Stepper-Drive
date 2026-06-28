@@ -30,8 +30,8 @@ void Step42App_Init(void)
     led_red_on;
   }
 
-  HAL_TIM_Base_Start_IT(&htim6);
   Step42Control_Init();
+  HAL_TIM_Base_Start_IT(&htim6);
 }
 
 void Step42App_Loop(void)
