@@ -24,7 +24,7 @@ WAVEFORM_PIXELS_PER_SECOND = 18
 
 REQ_SOF = b"\xA5\x5A"
 RESP_SOF = b"\x5A\xA5"
-MAX_PAYLOAD = 24
+MAX_PAYLOAD = 32
 
 CMD_PING = 0x01
 CMD_ENABLE = 0x02
@@ -217,8 +217,8 @@ class AngleViewer(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Step42 二进制协议调试")
-        self.geometry("1060x720")
-        self.minsize(960, 640)
+        self.geometry("1280x760")
+        self.minsize(1120, 680)
 
         self.frame_queue = queue.Queue()
         self.status_queue = queue.Queue()
@@ -321,23 +321,42 @@ class AngleViewer(tk.Tk):
             ttk.Label(data, textvariable=var, font=("Consolas", 28, "bold")).grid(row=1, column=col, sticky=tk.W, padx=(0 if col == 0 else 36, 0))
             data.columnconfigure(col, weight=1)
 
-        mode = ttk.LabelFrame(root, text="工作模式 / 驱动参数")
-        mode.pack(fill=tk.X, pady=(12, 0))
+        body = ttk.Frame(root)
+        body.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        body.columnconfigure(0, weight=0, minsize=540)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        left = ttk.Frame(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.rowconfigure(2, weight=1)
+        right.columnconfigure(0, weight=1)
+
+        mode = ttk.LabelFrame(left, text="工作模式 / 驱动参数")
+        mode.pack(fill=tk.X)
         ttk.Combobox(mode, textvariable=self.mode_var, values=list(MODE_LABELS.keys()), width=12, state="readonly").pack(side=tk.LEFT, padx=(8, 8), pady=8)
         ttk.Button(mode, text="设置模式", command=self.send_mode).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Label(mode, text="细分").pack(side=tk.LEFT, padx=(0, 6), pady=8)
         ttk.Combobox(mode, textvariable=self.microstep_var, values=["1", "2", "4", "8", "16", "32", "64", "128", "256"], width=6, state="readonly").pack(side=tk.LEFT, padx=(0, 8), pady=8)
         ttk.Button(mode, text="设置细分", command=self.send_microstep).pack(side=tk.LEFT, padx=(0, 12), pady=8)
-        ttk.Button(mode, text="使能", command=lambda: self.send_enable(1)).pack(side=tk.LEFT, padx=(0, 8), pady=8)
-        ttk.Button(mode, text="失能", command=lambda: self.send_enable(0)).pack(side=tk.LEFT, padx=(0, 12), pady=8)
-        ttk.Button(mode, text="数据流开", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, padx=(0, 8), pady=8)
-        ttk.Button(mode, text="数据流关", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, padx=(0, 12), pady=8)
-        ttk.Label(mode, textvariable=self.mode_status_var).pack(side=tk.LEFT, padx=(0, 12), pady=8)
-        ttk.Label(mode, textvariable=self.microstep_status_var).pack(side=tk.LEFT, padx=(0, 12), pady=8)
-        ttk.Label(mode, textvariable=self.enable_status_var).pack(side=tk.LEFT, padx=(0, 12), pady=8)
-        ttk.Label(mode, textvariable=self.stream_status_var).pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
-        speed = ttk.LabelFrame(root, text="速度模式")
+        drive = ttk.Frame(left)
+        drive.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(drive, text="使能", command=lambda: self.send_enable(1)).pack(side=tk.LEFT)
+        ttk.Button(drive, text="失能", command=lambda: self.send_enable(0)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(drive, text="数据流开", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, padx=(16, 0))
+        ttk.Button(drive, text="数据流关", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, padx=(8, 0))
+
+        mode_status = ttk.Frame(left)
+        mode_status.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(mode_status, textvariable=self.mode_status_var).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(mode_status, textvariable=self.microstep_status_var).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(mode_status, textvariable=self.enable_status_var).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(mode_status, textvariable=self.stream_status_var).pack(side=tk.LEFT)
+
+        speed = ttk.LabelFrame(left, text="速度模式")
         speed.pack(fill=tk.X, pady=(12, 0))
         ttk.Label(speed, text="Speed -5000~5000").pack(side=tk.LEFT, padx=(8, 6), pady=8)
         ttk.Entry(speed, textvariable=self.speed_var, width=10).pack(side=tk.LEFT, padx=(0, 8), pady=8)
@@ -347,7 +366,7 @@ class AngleViewer(tk.Tk):
         ttk.Button(speed, text="停止", command=self.send_stop).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Label(speed, textvariable=self.speed_status_var).pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
-        pulse = ttk.LabelFrame(root, text="位置模式：脉冲数移动")
+        pulse = ttk.LabelFrame(left, text="位置模式：脉冲数移动")
         pulse.pack(fill=tk.X, pady=(12, 0))
         ttk.Label(pulse, text="脉冲数").pack(side=tk.LEFT, padx=(8, 6), pady=8)
         ttk.Entry(pulse, textvariable=self.move_steps_var, width=12).pack(side=tk.LEFT, padx=(0, 8), pady=8)
@@ -358,34 +377,36 @@ class AngleViewer(tk.Tk):
         ttk.Button(pulse, text="发送脉冲", command=self.send_move_steps).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Label(pulse, textvariable=self.move_status_var).pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
-        angle = ttk.LabelFrame(root, text="位置模式：角度闭环")
+        angle = ttk.LabelFrame(left, text="位置模式：角度闭环")
         angle.pack(fill=tk.X, pady=(12, 0))
         ttk.Label(angle, text="目标 0~360°").pack(side=tk.LEFT, padx=(8, 6), pady=8)
         ttk.Entry(angle, textvariable=self.target_angle_var, width=12).pack(side=tk.LEFT, padx=(0, 8), pady=8)
         ttk.Button(angle, text="发送角度", command=self.send_angle_value).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Label(angle, textvariable=self.angle_status_var).pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
-        zero = ttk.LabelFrame(root, text="零点 / 回零")
-        zero.pack(fill=tk.X, pady=(12, 0))
+        zero = ttk.LabelFrame(right, text="零点 / 回零")
+        zero.grid(row=0, column=0, sticky="ew")
         ttk.Combobox(zero, textvariable=self.home_mode_var, values=list(HOME_MODE_LABELS.keys()), width=12, state="readonly").pack(side=tk.LEFT, padx=(8, 8), pady=8)
         ttk.Button(zero, text="设置回零模式", command=self.send_home_mode).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Button(zero, text="当前位置设为零点", command=self.send_set_zero).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Button(zero, text="回零", command=self.send_home).pack(side=tk.LEFT, padx=(0, 12), pady=8)
         ttk.Label(zero, textvariable=self.home_status_var).pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
-        pid = ttk.LabelFrame(root, text="闭环位置参数")
-        pid.pack(fill=tk.X, pady=(12, 0))
+        pid = ttk.LabelFrame(right, text="闭环位置参数")
+        pid.grid(row=1, column=0, sticky="ew", pady=(12, 0))
         labels = [("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var), ("Limit", self.limit_var), ("Deadband", self.deadband_var), ("Accel", self.closed_accel_var)]
         for i, (label, var) in enumerate(labels):
-            ttk.Label(pid, text=label).grid(row=0, column=i * 2, padx=(8, 4), pady=8, sticky=tk.W)
-            ttk.Entry(pid, textvariable=var, width=10).grid(row=0, column=i * 2 + 1, padx=(0, 10), pady=8)
-        ttk.Button(pid, text="写入PID", command=self.send_pid_values).grid(row=0, column=12, padx=(0, 8), pady=8)
-        ttk.Button(pid, text="写入加速度", command=self.send_closed_accel).grid(row=0, column=13, padx=(0, 8), pady=8)
-        ttk.Label(pid, textvariable=self.pid_status_var).grid(row=1, column=0, columnspan=9, padx=8, pady=(0, 8), sticky=tk.W)
-        ttk.Label(pid, textvariable=self.closed_accel_status_var).grid(row=1, column=9, columnspan=5, padx=8, pady=(0, 8), sticky=tk.W)
+            row = i // 3
+            col = (i % 3) * 2
+            ttk.Label(pid, text=label).grid(row=row, column=col, padx=(8, 4), pady=8, sticky=tk.W)
+            ttk.Entry(pid, textvariable=var, width=10).grid(row=row, column=col + 1, padx=(0, 10), pady=8, sticky=tk.W)
+        ttk.Button(pid, text="写入PID", command=self.send_pid_values).grid(row=0, column=6, padx=(0, 8), pady=8, sticky=tk.W)
+        ttk.Button(pid, text="写入加速度", command=self.send_closed_accel).grid(row=1, column=6, padx=(0, 8), pady=8, sticky=tk.W)
+        ttk.Label(pid, textvariable=self.pid_status_var).grid(row=2, column=0, columnspan=6, padx=8, pady=(0, 8), sticky=tk.W)
+        ttk.Label(pid, textvariable=self.closed_accel_status_var).grid(row=3, column=0, columnspan=6, padx=8, pady=(0, 8), sticky=tk.W)
 
-        wave = ttk.LabelFrame(root, text="目标/当前角度波形")
-        wave.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        wave = ttk.LabelFrame(right, text="目标/当前角度波形")
+        wave.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
         wave_toolbar = ttk.Frame(wave)
         wave_toolbar.pack(fill=tk.X, padx=8, pady=(8, 4))
         ttk.Checkbutton(wave_toolbar, text="暂停波形", variable=self.wave_paused_var).pack(side=tk.LEFT)
