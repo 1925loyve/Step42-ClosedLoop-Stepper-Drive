@@ -255,6 +255,7 @@ class AngleViewer(tk.Tk):
         self.auto_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="等待串口")
         self.raw_var = tk.StringVar(value="--")
+        self.abs_deg_var = tk.StringVar(value="--")
         self.deg_var = tk.StringVar(value="--")
         self.rpm_var = tk.StringVar(value="--")
         self.mode_var = tk.StringVar(value="闭环位置")
@@ -327,7 +328,7 @@ class AngleViewer(tk.Tk):
         data = ttk.Frame(root)
         data.pack(fill=tk.X, pady=(18, 0))
         for col, (title, var) in enumerate(
-            [("Raw", self.raw_var), ("Current", self.deg_var), ("RPM", self.rpm_var)]
+            [("Raw", self.raw_var), ("绝对角度", self.abs_deg_var), ("零点角度", self.deg_var), ("RPM", self.rpm_var)]
         ):
             ttk.Label(data, text=title, font=("Segoe UI", 12)).grid(row=0, column=col, sticky=tk.W, padx=(0 if col == 0 else 36, 0))
             ttk.Label(data, textvariable=var, font=("Consolas", 28, "bold")).grid(row=1, column=col, sticky=tk.W, padx=(0 if col == 0 else 36, 0))
@@ -742,8 +743,10 @@ class AngleViewer(tk.Tk):
     def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output, pid_params=None, microsteps=None, closed_accel=None, zero_valid=None, home_mode=None):
         now = time.monotonic()
         rpm = self._calc_rpm(raw, now)
+        abs_deg = (float(raw & 0x3FFF) * 360.0) / RAW_MAX
         self.current_angle_deg = deg
         self.raw_var.set(f"{raw:5d}")
+        self.abs_deg_var.set(f"{abs_deg:7.3f}°")
         self.deg_var.set(f"{deg:7.3f}°")
         if (now - self.last_rpm_display_time) >= RPM_DISPLAY_INTERVAL:
             self.rpm_var.set(f"{rpm:7.2f}")
@@ -805,6 +808,8 @@ class AngleViewer(tk.Tk):
         self.rpm_filtered = 0.0
         self.last_rpm_display_time = 0.0
         self.rpm_var.set("--")
+        self.abs_deg_var.set("--")
+        self.deg_var.set("--")
         self.current_angle_deg = None
         self.target_angle_deg = None
         self.wave_history.clear()
