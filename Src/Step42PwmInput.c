@@ -19,6 +19,7 @@ static volatile uint32_t captured_pulse_us = 0U;
 static volatile uint8_t capture_pending = 0U;
 static uint32_t last_valid_ms = 0U;
 static float last_angle_deg = -1.0f;
+static uint8_t pwm_started = 0U;
 
 static float AbsF(float value)
 {
@@ -27,14 +28,10 @@ static float AbsF(float value)
 
 void Step42PwmInput_Init(void)
 {
-    if (Step42BoardMode_Get() != STEP42_BOARD_PWM)
-    {
-        return;
-    }
-
-    Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
-    HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
-    HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+    pwm_started = 0U;
+    capture_pending = 0U;
+    last_valid_ms = 0U;
+    last_angle_deg = -1.0f;
 }
 
 void Step42PwmInput_CaptureCallback(TIM_HandleTypeDef *htim)
@@ -57,8 +54,27 @@ void Step42PwmInput_Process(void)
     uint32_t pulse;
     float angle;
 
-    if (Step42BoardMode_Get() != STEP42_BOARD_PWM)
+    if (Step42BoardMode_Get() == STEP42_BOARD_PWM)
     {
+        if (pwm_started == 0U)
+        {
+            Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
+            HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
+            HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+            pwm_started = 1U;
+        }
+    }
+    else
+    {
+        if (pwm_started != 0U)
+        {
+            HAL_TIM_IC_Stop_IT(&htim2, TIM_CHANNEL_1);
+            HAL_TIM_IC_Stop_IT(&htim2, TIM_CHANNEL_2);
+            capture_pending = 0U;
+            last_valid_ms = 0U;
+            last_angle_deg = -1.0f;
+            pwm_started = 0U;
+        }
         return;
     }
 

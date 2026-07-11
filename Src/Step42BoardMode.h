@@ -12,6 +12,7 @@ typedef enum
 } Step42BoardMode_t;
 
 void Step42BoardMode_Init(void);
+uint8_t Step42BoardMode_Process(void);
 Step42BoardMode_t Step42BoardMode_Get(void);
 
 #endif

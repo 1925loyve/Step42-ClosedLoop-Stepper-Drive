@@ -75,7 +75,7 @@ MT6701_Status_t MT6701_ReadFrame(MT6701_Frame_t *frame)
     uint8_t received_crc = packet & 0x3FU;
     uint8_t calculated_crc = MT6701_CalcCrc6(crc_data);
 
-    frame->raw_angle = (uint16_t)((packet >> 9) & 0x3FFFU);
+    frame->raw_angle = (uint16_t)((packet >> 10) & 0x3FFFU);
     frame->magnetic_status = (uint8_t)((packet >> 6) & 0x0FU);
     frame->crc = received_crc;
     frame->crc_ok = (received_crc == calculated_crc) ? 1U : 0U;

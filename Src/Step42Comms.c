@@ -673,6 +673,20 @@ void Step42Comms_Init(void)
   active_uart = (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG) ? &huart3 : &huart2;
 }
 
+void Step42Comms_OnBoardModeChanged(void)
+{
+  Step42Slave_ParserInit(&error_parser);
+  Step42Slave_ParserInit(&debug_parser);
+  debug_stream_enable = 0U;
+  debug_tx_pause_until_ms = 0U;
+  active_uart = (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG) ? &huart3 : &huart2;
+
+  __HAL_UART_CLEAR_OREFLAG(&huart2);
+  __HAL_UART_FLUSH_DRREGISTER(&huart2);
+  __HAL_UART_CLEAR_OREFLAG(&huart3);
+  __HAL_UART_FLUSH_DRREGISTER(&huart3);
+}
+
 void Step42Comms_ProcessRx(void)
 {
   if (Step42BoardMode_Get() == STEP42_BOARD_UART)

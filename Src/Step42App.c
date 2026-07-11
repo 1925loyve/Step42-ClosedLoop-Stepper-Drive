@@ -42,6 +42,11 @@ void Step42App_Init(void)
 
 void Step42App_Loop(void)
 {
+  if (Step42BoardMode_Process() != 0U)
+  {
+    Step42Control_SetUserEnable(0U);
+    Step42Comms_OnBoardModeChanged();
+  }
   Step42Sensors_Process();
   Step42Control_SetThermalLockout(
       (Step42Sensors_GetFlags() & STEP42_SENSOR_TEMP_SHUTDOWN) != 0U);
