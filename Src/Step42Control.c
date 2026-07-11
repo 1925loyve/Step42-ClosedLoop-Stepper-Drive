@@ -3,6 +3,7 @@
 #include "Tmc2209.h"
 #include "led.h"
 #include "pid.h"
+#include "Step42Tracking.h"
 
 #define WEAK_PID_OUTPUT_SIGN (1.0f)
 #define DEFAULT_CLOSED_ACCEL_STEPS (3000.0f)
@@ -15,8 +16,12 @@
 #define STEP42_CFG_ADDR (FLASH_BASE + FLASH_SIZE - FLASH_PAGE_SIZE)
 #define STEP42_CFG_FLASH_PAGE (FLASH_PAGE_NB - 1U)
 #define STEP42_FLASH_WRITE_GUARD_MS (2000UL)
+#define CONTROL_TIMER_TICK_HZ (1000000UL)
+#define SPEED_ESTIMATE_WINDOW_S (0.020f)
+#define SPEED_FILTER_ALPHA (0.25f)
 
 extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim6;
 
 Stepper_t Motor_42;
 
@@ -77,6 +82,11 @@ static float zero_offset_deg = 0.0f;
 static uint8_t zero_valid = 0U;
 static uint8_t home_mode = CTRL_HOME_NEAREST;
 static uint32_t last_flash_write_ms = 0U;
+static uint32_t control_loop_hz = 1000UL;
+static float speed_accum_delta_deg = 0.0f;
+static float speed_accum_time_s = 0.0f;
+static float motor_speed_rpm = 0.0f;
+static uint8_t thermal_lockout = 0U;
 
 static float AbsF(float value)
 {
@@ -229,12 +239,16 @@ static void Stepper_ForceStopPosition(Stepper_t *stepper)
 
 static void Motor_EnableOutput(void)
 {
-  Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_EN);
+  if (thermal_lockout == 0U)
+  {
+    Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_EN);
+  }
 }
 
 static void Motor_DisableOutput(void)
 {
   weak_pid_enable = 0U;
+  Step42Tracking_Stop();
   Stepper_ForceStopPosition(&Motor_42);
   Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_UNEN);
 }
@@ -451,6 +465,62 @@ static void ClosedSpeed_Update(void)
   }
 }
 
+static void SetControlLoopFrequency(uint8_t frequency_khz)
+{
+  uint32_t new_hz = (uint32_t)frequency_khz * 1000UL;
+  uint32_t period;
+
+  if ((new_hz < 1000UL) || (new_hz > 10000UL))
+  {
+    new_hz = 1000UL;
+  }
+  period = (CONTROL_TIMER_TICK_HZ / new_hz) - 1UL;
+
+  __disable_irq();
+  __HAL_TIM_SET_AUTORELOAD(&htim6, period);
+  __HAL_TIM_SET_COUNTER(&htim6, 0UL);
+  __enable_irq();
+
+  control_loop_hz = new_hz;
+  weak_pid.dt = 1.0f / (float)control_loop_hz;
+  speed_pid.dt = weak_pid.dt;
+  speed_feedback_valid = 0U;
+  speed_accum_delta_deg = 0.0f;
+  speed_accum_time_s = 0.0f;
+}
+
+static void Tracking_ApplySpeed(float speed)
+{
+  if ((motor_user_enabled == 0U) || (thermal_lockout != 0U))
+  {
+    Stepper_ForceStopPosition(&Motor_42);
+    return;
+  }
+
+  weak_pid_output_steps = speed;
+  if (AbsF(speed) < 1.0f)
+  {
+    Stepper_Stop(&Motor_42);
+    led_white_off;
+    return;
+  }
+
+  if ((Motor_42.state != STOP) &&
+      (((Motor_42.current_speed > 0.0f) && (speed < 0.0f)) ||
+       ((Motor_42.current_speed < 0.0f) && (speed > 0.0f))))
+  {
+    Stepper_Stop(&Motor_42);
+  }
+
+  Motor_42.run_mode = MODE_SPEED;
+  Stepper_Set_Speed_Profile(&Motor_42, speed, Step42Tracking_GetAccel());
+  if (Motor_42.state == STOP)
+  {
+    Stepper_Run_Speed(&Motor_42);
+  }
+  led_white_on;
+}
+
 void Step42Control_Init(void)
 {
   Stepper_Init(&Motor_42, &htim1, TIM_CHANNEL_1, tmc_DIR_GPIO_Port, tmc_DIR_Pin, MODE_SPEED);
@@ -458,6 +528,7 @@ void Step42Control_Init(void)
   ApplyDefaultParams(motor_microsteps);
   Tmc2209_SetMicrosteps(motor_microsteps);
   PID_Init(&speed_pid, 0.25f, 1.0f, 0.0f, 0.001f, 1500.0f, 1000.0f, 5.0f);
+  Step42Tracking_Init();
   Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_UNEN);
 }
 
@@ -465,6 +536,12 @@ void Step42Control_SetUserEnable(uint8_t enable)
 {
   if (enable != 0U)
   {
+    if (thermal_lockout != 0U)
+    {
+      Motor_DisableOutput();
+      motor_user_enabled = 0U;
+      return;
+    }
     Motor_EnableOutput();
     if (control_mode == CTRL_MODE_CLOSED_POSITION)
     {
@@ -488,17 +565,41 @@ void Step42Control_SetUserEnable(uint8_t enable)
   }
 }
 
-void Step42Control_SetMode(uint8_t mode)
+uint8_t Step42Control_SetMode(uint8_t mode)
 {
   if ((mode != CTRL_MODE_OPEN_SPEED) &&
       (mode != CTRL_MODE_OPEN_POSITION) &&
-      (mode != CTRL_MODE_CLOSED_POSITION))
+      (mode != CTRL_MODE_CLOSED_POSITION) &&
+      (mode != CTRL_MODE_TRACK_PID))
   {
-    return;
+    return 0U;
   }
 
   Step42Control_StopMotion();
+  if (mode == CTRL_MODE_TRACK_PID)
+  {
+    if (motor_microsteps != 32U)
+    {
+      if (Tmc2209_SetMicrosteps(32U) == 0U)
+      {
+        return 0U;
+      }
+      motor_microsteps = 32U;
+      motor_steps_per_rev = MOTOR_BASE_STEPS_PER_REV * 32.0f;
+    }
+  }
+
   control_mode = mode;
+  if (mode == CTRL_MODE_TRACK_PID)
+  {
+    SetControlLoopFrequency(Step42Tracking_GetConfig()->frequency_khz);
+    Motor_42.run_mode = MODE_SPEED;
+    Step42Tracking_Stop();
+  }
+  else
+  {
+    SetControlLoopFrequency(1U);
+  }
   if (mode == CTRL_MODE_OPEN_POSITION)
   {
     Motor_42.run_mode = MODE_POSITION;
@@ -514,6 +615,7 @@ void Step42Control_SetMode(uint8_t mode)
     PID_Reset(&weak_pid);
     weak_pid_enable = 1U;
   }
+  return 1U;
 }
 
 void Step42Control_MoveToAngleByMode(float target_angle)
@@ -581,6 +683,7 @@ void Step42Control_RunSpeedByMode(float speed, float accel)
 void Step42Control_StopMotion(void)
 {
   weak_pid_enable = 0U;
+  Step42Tracking_Stop();
   closed_speed_target_steps = 0.0f;
   Stepper_ForceStopPosition(&Motor_42);
   led_white_off;
@@ -599,6 +702,10 @@ uint8_t Step42Control_SetClosedAccel(float accel)
 
 uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
 {
+  if (control_mode == CTRL_MODE_TRACK_PID)
+  {
+    return 0U;
+  }
   switch (microsteps)
   {
   case 1:
@@ -779,6 +886,7 @@ void Step42Control_HandleKey(int8_t key_flag)
 uint8_t Step42Control_TimerTick1kHz(void)
 {
   uint16_t raw_angle = 0U;
+  float dt = 1.0f / (float)control_loop_hz;
 
   mt6701_status = MT6701_ReadRawAngleNoCrc(&raw_angle);
   if (mt6701_status != MT6701_OK)
@@ -798,10 +906,32 @@ uint8_t Step42Control_TimerTick1kHz(void)
     }
     else
     {
-      closed_speed_feedback_steps = (unwrapped_angle - speed_last_unwrapped_deg) * motor_steps_per_rev / 360.0f / 0.001f;
+      float delta_deg = unwrapped_angle - speed_last_unwrapped_deg;
+
+      closed_speed_feedback_steps = delta_deg * motor_steps_per_rev / 360.0f / dt;
       speed_last_unwrapped_deg = unwrapped_angle;
+      speed_accum_delta_deg += delta_deg;
+      speed_accum_time_s += dt;
+      if (speed_accum_time_s >= SPEED_ESTIMATE_WINDOW_S)
+      {
+        float instant_rpm = (speed_accum_delta_deg / 360.0f) * 60.0f / speed_accum_time_s;
+        motor_speed_rpm += SPEED_FILTER_ALPHA * (instant_rpm - motor_speed_rpm);
+        speed_accum_delta_deg = 0.0f;
+        speed_accum_time_s = 0.0f;
+      }
     }
-    WeakPID_Update(unwrapped_angle);
+    if (control_mode == CTRL_MODE_CLOSED_POSITION)
+    {
+      WeakPID_Update(unwrapped_angle);
+    }
+    else if (control_mode == CTRL_MODE_TRACK_PID)
+    {
+      float tracking_output = 0.0f;
+      if (Step42Tracking_Update(dt, &tracking_output) != 0U)
+      {
+        Tracking_ApplySpeed(tracking_output);
+      }
+    }
   }
 
   return 1U;
@@ -840,6 +970,100 @@ float Step42Control_GetPidOutputSteps(void)
 float Step42Control_GetClosedAccel(void)
 {
   return closed_position_accel;
+}
+
+float Step42Control_GetSpeedRpm(void)
+{
+  return motor_speed_rpm;
+}
+
+uint8_t Step42Control_SetTrackingBasic(uint8_t mode,
+                                       uint8_t speed_percent,
+                                       uint8_t accel_percent,
+                                       uint8_t frequency_khz)
+{
+  if (Step42Tracking_SetBasic(mode, speed_percent, accel_percent, frequency_khz) == 0U)
+  {
+    return 0U;
+  }
+  if (control_mode == CTRL_MODE_TRACK_PID)
+  {
+    SetControlLoopFrequency(frequency_khz);
+  }
+  return 1U;
+}
+
+uint8_t Step42Control_SetTrackingPid(uint8_t loop, float kp, float ki, float kd)
+{
+  return Step42Tracking_SetPid(loop, kp, ki, kd);
+}
+
+uint8_t Step42Control_SetTrackingAdvanced(float filter_alpha,
+                                          float gain_min,
+                                          float gain_max,
+                                          float full_error,
+                                          float prediction_ms,
+                                          uint16_t timeout_ms,
+                                          float single_deadband,
+                                          float outer_deadband,
+                                          float inner_deadband)
+{
+  return Step42Tracking_SetAdvanced(filter_alpha,
+                                    gain_min,
+                                    gain_max,
+                                    full_error,
+                                    prediction_ms,
+                                    timeout_ms,
+                                    single_deadband,
+                                    outer_deadband,
+                                    inner_deadband);
+}
+
+void Step42Control_SetTrackingInput(float primary_error, float secondary_feedback)
+{
+  if (control_mode != CTRL_MODE_TRACK_PID)
+  {
+    return;
+  }
+  if (motor_user_enabled == 0U)
+  {
+    Step42Control_SetUserEnable(1U);
+  }
+  Step42Tracking_SetInput(primary_error, secondary_feedback);
+}
+
+void Step42Control_ResetTrackingDefaults(void)
+{
+  Step42Tracking_ResetDefaults();
+  if (control_mode == CTRL_MODE_TRACK_PID)
+  {
+    SetControlLoopFrequency(Step42Tracking_GetConfig()->frequency_khz);
+  }
+}
+
+void Step42Control_SetThermalLockout(uint8_t lockout)
+{
+  uint8_t new_lockout = (lockout != 0U) ? 1U : 0U;
+
+  if (new_lockout == thermal_lockout)
+  {
+    return;
+  }
+  thermal_lockout = new_lockout;
+  if (thermal_lockout != 0U)
+  {
+    Step42Control_SetUserEnable(0U);
+  }
+}
+
+uint8_t Step42Control_IsThermalLocked(void)
+{
+  return thermal_lockout;
+}
+
+const Step42TrackingConfig_t *Step42Control_GetTrackingConfig(void)
+{
+  return Step42Tracking_GetConfig();
 }
 
 uint8_t Step42Control_GetHomeMode(void)

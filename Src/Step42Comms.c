@@ -1,22 +1,28 @@
 #include "Step42Comms.h"
 #include "Step42Control.h"
 #include "Step42SlaveProtocol.h"
+#include "Step42BoardMode.h"
+#include "Step42Sensors.h"
+#include "Step42Tracking.h"
 
 #define DEBUG_RAW_TX_INTERVAL_MS (20UL)
 
 extern UART_HandleTypeDef huart2;
+extern UART_HandleTypeDef huart3;
 
-static Step42Slave_Parser_t ctrl_parser;
+static Step42Slave_Parser_t error_parser;
+static Step42Slave_Parser_t debug_parser;
+static UART_HandleTypeDef *active_uart = &huart2;
 static volatile uint8_t debug_tx_busy = 0U;
 static volatile uint32_t debug_tx_pause_until_ms = 0U;
 static volatile uint32_t debug_raw_last_tx_ms = 0U;
 static volatile uint32_t debug_rx_count = 0U;
-static uint8_t debug_stream_enable = 1U;
+static uint8_t debug_stream_enable = 0U;
 
 static void Debug_SendBytes(uint8_t *buf, uint8_t len)
 {
   debug_tx_busy = 1U;
-  HAL_UART_Transmit(&huart2, buf, len, 30);
+  HAL_UART_Transmit(active_uart, buf, len, 30);
   debug_tx_pause_until_ms = HAL_GetTick() + 50U;
   debug_tx_busy = 0U;
 }
@@ -59,9 +65,22 @@ static void Ctrl_WriteI32(uint8_t *payload, uint8_t index, int32_t value)
   payload[index + 3U] = (uint8_t)((raw >> 24) & 0xFFU);
 }
 
+static int16_t Ctrl_ClampI16(float value)
+{
+  if (value > 32767.0f)
+  {
+    return 32767;
+  }
+  if (value < -32768.0f)
+  {
+    return -32768;
+  }
+  return (int16_t)value;
+}
+
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[32];
+  uint8_t resp[48];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -107,7 +126,52 @@ void Step42Comms_SendQuery(uint8_t seq)
   Step42Slave_WriteU16(resp, 28U, (uint16_t)Step42Control_GetClosedAccel());
   resp[30] = Step42Control_IsZeroValid();
   resp[31] = Step42Control_GetHomeMode();
+  resp[32] = (uint8_t)Step42BoardMode_Get();
+  resp[33] = Step42Sensors_GetFlags();
+  Step42Slave_WriteI16(resp, 34U, Ctrl_ClampI16(Step42Sensors_GetTemperatureC() * 100.0f));
+  Step42Slave_WriteI16(resp, 36U, Ctrl_ClampI16(Step42Control_GetSpeedRpm() * 10.0f));
+  {
+    const Step42TrackingConfig_t *tracking = Step42Control_GetTrackingConfig();
+    resp[38] = tracking->mode;
+    resp[39] = tracking->frequency_khz;
+    resp[40] = tracking->speed_percent;
+    resp[41] = tracking->accel_percent;
+  }
+  Step42Slave_WriteI16(resp, 42U, Ctrl_ClampI16(Step42Tracking_GetPrimaryError() * 100.0f));
+  Step42Slave_WriteI16(resp, 44U, Ctrl_ClampI16(Step42Tracking_GetSecondaryFeedback() * 100.0f));
+  Step42Slave_WriteI16(resp, 46U, Ctrl_ClampI16(Step42Tracking_GetOutput()));
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
+}
+
+static void Step42Comms_SendTrackingQuery(uint8_t seq)
+{
+  uint8_t resp[59];
+  const Step42TrackingConfig_t *cfg = Step42Control_GetTrackingConfig();
+
+  resp[0] = CTRL_STATUS_OK;
+  resp[1] = cfg->mode;
+  resp[2] = cfg->speed_percent;
+  resp[3] = cfg->accel_percent;
+  resp[4] = cfg->frequency_khz;
+  Ctrl_WriteI32(resp, 5U, (int32_t)(cfg->single.kp * 100.0f));
+  Ctrl_WriteI32(resp, 9U, (int32_t)(cfg->single.ki * 100.0f));
+  Ctrl_WriteI32(resp, 13U, (int32_t)(cfg->single.kd * 100.0f));
+  Ctrl_WriteI32(resp, 17U, (int32_t)(cfg->outer.kp * 100.0f));
+  Ctrl_WriteI32(resp, 21U, (int32_t)(cfg->outer.ki * 100.0f));
+  Ctrl_WriteI32(resp, 25U, (int32_t)(cfg->outer.kd * 100.0f));
+  Ctrl_WriteI32(resp, 29U, (int32_t)(cfg->inner.kp * 100.0f));
+  Ctrl_WriteI32(resp, 33U, (int32_t)(cfg->inner.ki * 100.0f));
+  Ctrl_WriteI32(resp, 37U, (int32_t)(cfg->inner.kd * 100.0f));
+  Step42Slave_WriteU16(resp, 41U, (uint16_t)(cfg->filter_alpha * 1000.0f));
+  Step42Slave_WriteU16(resp, 43U, (uint16_t)(cfg->dynamic_gain_min * 1000.0f));
+  Step42Slave_WriteU16(resp, 45U, (uint16_t)(cfg->dynamic_gain_max * 1000.0f));
+  Step42Slave_WriteU16(resp, 47U, (uint16_t)(cfg->dynamic_full_error * 100.0f));
+  Step42Slave_WriteU16(resp, 49U, (uint16_t)cfg->prediction_ms);
+  Step42Slave_WriteU16(resp, 51U, cfg->timeout_ms);
+  Step42Slave_WriteU16(resp, 53U, (uint16_t)(cfg->single.deadband * 1000.0f));
+  Step42Slave_WriteU16(resp, 55U, (uint16_t)(cfg->outer.deadband * 1000.0f));
+  Step42Slave_WriteU16(resp, 57U, (uint16_t)(cfg->inner.deadband * 1000.0f));
+  Ctrl_SendFrame(CTRL_CMD_TRACK_QUERY, seq, resp, sizeof(resp));
 }
 
 static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint8_t len)
@@ -279,13 +343,18 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     }
     if ((payload[0] != CTRL_MODE_OPEN_SPEED) &&
         (payload[0] != CTRL_MODE_OPEN_POSITION) &&
-        (payload[0] != CTRL_MODE_CLOSED_POSITION))
+        (payload[0] != CTRL_MODE_CLOSED_POSITION) &&
+        (payload[0] != CTRL_MODE_TRACK_PID))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;
     }
 
-    Step42Control_SetMode(payload[0]);
+    if (Step42Control_SetMode(payload[0]) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -353,6 +422,11 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     }
 
     microsteps = Step42Slave_ReadU16(payload);
+    if (Step42Control_GetMode() == CTRL_MODE_TRACK_PID)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
+      return;
+    }
     if (Step42Control_SetMicrosteps(microsteps) == 0U)
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
@@ -431,35 +505,183 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_TRACK_CONFIG)
+  {
+    if (len != 4U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (Step42Control_SetTrackingBasic(payload[0], payload[1], payload[2], payload[3]) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_TRACK_PID)
+  {
+    if (len != 13U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (Step42Control_SetTrackingPid(payload[0],
+                                     ((float)Ctrl_ReadI32(payload + 1U)) / 100.0f,
+                                     ((float)Ctrl_ReadI32(payload + 5U)) / 100.0f,
+                                     ((float)Ctrl_ReadI32(payload + 9U)) / 100.0f) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_TRACK_ADVANCED)
+  {
+    if (len != 18U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (Step42Control_SetTrackingAdvanced(
+            ((float)Step42Slave_ReadU16(payload)) / 1000.0f,
+            ((float)Step42Slave_ReadU16(payload + 2U)) / 1000.0f,
+            ((float)Step42Slave_ReadU16(payload + 4U)) / 1000.0f,
+            ((float)Step42Slave_ReadU16(payload + 6U)) / 100.0f,
+            (float)Step42Slave_ReadU16(payload + 8U),
+            Step42Slave_ReadU16(payload + 10U),
+            ((float)Step42Slave_ReadU16(payload + 12U)) / 1000.0f,
+            ((float)Step42Slave_ReadU16(payload + 14U)) / 1000.0f,
+            ((float)Step42Slave_ReadU16(payload + 16U)) / 1000.0f) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_TRACK_INPUT)
+  {
+    if (len != 4U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (Step42Control_GetMode() != CTRL_MODE_TRACK_PID)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
+      return;
+    }
+    Step42Control_SetTrackingInput(((float)Step42Slave_ReadI16(payload)) / 100.0f,
+                                   ((float)Step42Slave_ReadI16(payload + 2U)) / 100.0f);
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_TRACK_DEFAULT)
+  {
+    if (len != 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    Step42Control_ResetTrackingDefaults();
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_TRACK_QUERY)
+  {
+    if (len != 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    Step42Comms_SendTrackingQuery(seq);
+    return;
+  }
+
   Ctrl_SendStatus(cmd, seq, CTRL_STATUS_UNKNOWN_CMD);
 }
 
-static void Ctrl_ProcessRxByte(uint8_t ch)
+static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
+{
+  switch (cmd)
+  {
+  case CTRL_CMD_PING:
+  case CTRL_CMD_ENABLE:
+  case CTRL_CMD_STREAM:
+  case CTRL_CMD_QUERY:
+  case CTRL_CMD_MODE:
+  case CTRL_CMD_STOP:
+  case CTRL_CMD_TRACK_CONFIG:
+  case CTRL_CMD_TRACK_PID:
+  case CTRL_CMD_TRACK_ADVANCED:
+  case CTRL_CMD_TRACK_INPUT:
+  case CTRL_CMD_TRACK_DEFAULT:
+  case CTRL_CMD_TRACK_QUERY:
+    return 1U;
+  default:
+    return 0U;
+  }
+}
+
+static void Ctrl_ProcessRxByte(Step42Slave_Parser_t *parser, uint8_t ch, uint8_t restricted)
 {
   Step42Slave_Frame_t frame;
 
-  if (Step42Slave_ProcessByte(&ctrl_parser, ch, &frame) != 0U)
+  if (Step42Slave_ProcessByte(parser, ch, &frame) != 0U)
   {
+    if ((restricted != 0U) && (Ctrl_DebugCommandAllowed(frame.cmd) == 0U))
+    {
+      Ctrl_SendStatus(frame.cmd, frame.seq, CTRL_STATUS_DENIED);
+      return;
+    }
     Ctrl_ProcessFrame(frame.cmd, frame.seq, frame.payload, frame.len);
+  }
+}
+
+static void Ctrl_ProcessUart(UART_HandleTypeDef *huart,
+                             Step42Slave_Parser_t *parser,
+                             uint8_t restricted)
+{
+  active_uart = huart;
+  while ((huart->Instance->ISR & USART_ISR_RXNE_RXFNE) != 0U)
+  {
+    debug_rx_count++;
+    Ctrl_ProcessRxByte(parser,
+                       (uint8_t)(huart->Instance->RDR & 0xFFU),
+                       restricted);
+  }
+
+  if ((huart->Instance->ISR & USART_ISR_ORE) != 0U)
+  {
+    __HAL_UART_CLEAR_OREFLAG(huart);
   }
 }
 
 void Step42Comms_Init(void)
 {
-  Step42Slave_ParserInit(&ctrl_parser);
+  Step42Slave_ParserInit(&error_parser);
+  Step42Slave_ParserInit(&debug_parser);
+  debug_stream_enable = 0U;
+  active_uart = (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG) ? &huart3 : &huart2;
 }
 
 void Step42Comms_ProcessRx(void)
 {
-  while ((huart2.Instance->ISR & USART_ISR_RXNE_RXFNE) != 0U)
+  if (Step42BoardMode_Get() == STEP42_BOARD_UART)
   {
-    debug_rx_count++;
-    Ctrl_ProcessRxByte((uint8_t)(huart2.Instance->RDR & 0xFFU));
+    Ctrl_ProcessUart(&huart2, &error_parser, 0U);
   }
-
-  if ((huart2.Instance->ISR & USART_ISR_ORE) != 0U)
+  else if (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG)
   {
-    __HAL_UART_CLEAR_OREFLAG(&huart2);
+    Ctrl_ProcessUart(&huart3, &debug_parser, 1U);
   }
 }
 
@@ -481,6 +703,10 @@ void Step42Comms_OnUartError(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2)
   {
-    Step42Slave_ParserInit(&ctrl_parser);
+    Step42Slave_ParserInit(&error_parser);
+  }
+  else if (huart->Instance == USART3)
+  {
+    Step42Slave_ParserInit(&debug_parser);
   }
 }

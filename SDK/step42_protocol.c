@@ -421,7 +421,8 @@ uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_
 
     if ((mode != STEP42_MODE_OPEN_SPEED) &&
         (mode != STEP42_MODE_OPEN_POSITION) &&
-        (mode != STEP42_MODE_CLOSED_POSITION))
+        (mode != STEP42_MODE_CLOSED_POSITION) &&
+        (mode != STEP42_MODE_TRACK_PID))
     {
         return 0U;
     }
@@ -433,6 +434,106 @@ uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_
 uint16_t Step42_BuildStop(uint8_t *buf, uint16_t max_len, uint8_t seq)
 {
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_STOP, seq, 0, 0U);
+}
+
+uint16_t Step42_BuildTrackConfig(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                                uint8_t mode, uint8_t speed_percent,
+                                uint8_t accel_percent, uint8_t frequency_khz)
+{
+    uint8_t payload[4];
+
+    if ((mode < 1U) || (mode > 2U) ||
+        (speed_percent < 1U) || (speed_percent > 100U) ||
+        (accel_percent < 1U) || (accel_percent > 100U) ||
+        (frequency_khz < 1U) || (frequency_khz > 10U))
+    {
+        return 0U;
+    }
+    payload[0] = mode;
+    payload[1] = speed_percent;
+    payload[2] = accel_percent;
+    payload[3] = frequency_khz;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_CONFIG, seq,
+                             payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildTrackPid(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                             uint8_t loop, float kp, float ki, float kd)
+{
+    uint8_t payload[13];
+
+    if ((loop > 2U) || (kp < 0.0f) || (ki < 0.0f) || (kd < 0.0f))
+    {
+        return 0U;
+    }
+    payload[0] = loop;
+    Step42_WriteI32(payload, 1U, (int32_t)(kp * 100.0f));
+    Step42_WriteI32(payload, 5U, (int32_t)(ki * 100.0f));
+    Step42_WriteI32(payload, 9U, (int32_t)(kd * 100.0f));
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_PID, seq,
+                             payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildTrackInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                               float primary_error, float secondary_feedback)
+{
+    uint8_t payload[4];
+    float primary_scaled = primary_error * 100.0f;
+    float secondary_scaled = secondary_feedback * 100.0f;
+
+    if ((primary_scaled < -32768.0f) || (primary_scaled > 32767.0f) ||
+        (secondary_scaled < -32768.0f) || (secondary_scaled > 32767.0f))
+    {
+        return 0U;
+    }
+    Step42_WriteI16(payload, 0U, (int16_t)primary_scaled);
+    Step42_WriteI16(payload, 2U, (int16_t)secondary_scaled);
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_INPUT, seq,
+                             payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildTrackAdvanced(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                                  float filter_alpha, float gain_min,
+                                  float gain_max, float full_error,
+                                  uint16_t prediction_ms, uint16_t timeout_ms,
+                                  float single_deadband, float outer_deadband,
+                                  float inner_deadband)
+{
+    uint8_t payload[18];
+
+    if ((filter_alpha <= 0.0f) || (filter_alpha > 1.0f) ||
+        (gain_min < 0.1f) || (gain_min > 10.0f) ||
+        (gain_max < gain_min) || (gain_max > 10.0f) ||
+        (full_error <= 0.0f) || (full_error > 655.35f) ||
+        (prediction_ms > 200U) || (timeout_ms < 20U) || (timeout_ms > 5000U) ||
+        (single_deadband < 0.0f) || (single_deadband > 65.535f) ||
+        (outer_deadband < 0.0f) || (outer_deadband > 65.535f) ||
+        (inner_deadband < 0.0f) || (inner_deadband > 65.535f))
+    {
+        return 0U;
+    }
+
+    Step42_WriteU16(payload, 0U, Step42_FloatToU16Scaled(filter_alpha, 1000.0f));
+    Step42_WriteU16(payload, 2U, Step42_FloatToU16Scaled(gain_min, 1000.0f));
+    Step42_WriteU16(payload, 4U, Step42_FloatToU16Scaled(gain_max, 1000.0f));
+    Step42_WriteU16(payload, 6U, Step42_FloatToU16Scaled(full_error, 100.0f));
+    Step42_WriteU16(payload, 8U, prediction_ms);
+    Step42_WriteU16(payload, 10U, timeout_ms);
+    Step42_WriteU16(payload, 12U, Step42_FloatToU16Scaled(single_deadband, 1000.0f));
+    Step42_WriteU16(payload, 14U, Step42_FloatToU16Scaled(outer_deadband, 1000.0f));
+    Step42_WriteU16(payload, 16U, Step42_FloatToU16Scaled(inner_deadband, 1000.0f));
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_ADVANCED, seq,
+                             payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildTrackDefaults(uint8_t *buf, uint16_t max_len, uint8_t seq)
+{
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_DEFAULT, seq, 0, 0U);
+}
+
+uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq)
+{
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_QUERY, seq, 0, 0U);
 }
 
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status)
@@ -487,6 +588,20 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     if (response->len >= 22U)
     {
         status->microsteps = Step42_ReadU16(response->payload, 20U);
+    }
+    if (response->len >= 48U)
+    {
+        status->board_mode = response->payload[32];
+        status->sensor_flags = response->payload[33];
+        status->temperature_c = ((float)Step42_ReadI16(response->payload, 34U)) / 100.0f;
+        status->speed_rpm = ((float)Step42_ReadI16(response->payload, 36U)) / 10.0f;
+        status->tracking_mode = response->payload[38];
+        status->tracking_frequency_khz = response->payload[39];
+        status->tracking_speed_percent = response->payload[40];
+        status->tracking_accel_percent = response->payload[41];
+        status->tracking_primary_error = ((float)Step42_ReadI16(response->payload, 42U)) / 100.0f;
+        status->tracking_secondary_feedback = ((float)Step42_ReadI16(response->payload, 44U)) / 100.0f;
+        status->tracking_output = Step42_ReadI16(response->payload, 46U);
     }
     return 0;
 }

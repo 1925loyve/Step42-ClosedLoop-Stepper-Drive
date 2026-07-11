@@ -11,7 +11,7 @@ extern "C" {
 #define STEP42_SOF2                 (0x5AU)
 #define STEP42_RESP_SOF1            (0x5AU)
 #define STEP42_RESP_SOF2            (0xA5U)
-#define STEP42_MAX_PAYLOAD          (32U)
+#define STEP42_MAX_PAYLOAD          (64U)
 #define STEP42_MAX_FRAME_SIZE       (STEP42_MAX_PAYLOAD + 6U)
 
 #define STEP42_CMD_PING             (0x01U)
@@ -29,6 +29,12 @@ extern "C" {
 #define STEP42_CMD_HOME_MODE        (0x0DU)
 #define STEP42_CMD_SET_ZERO         (0x0EU)
 #define STEP42_CMD_HOME             (0x0FU)
+#define STEP42_CMD_TRACK_CONFIG     (0x10U)
+#define STEP42_CMD_TRACK_PID        (0x11U)
+#define STEP42_CMD_TRACK_ADVANCED   (0x12U)
+#define STEP42_CMD_TRACK_INPUT      (0x13U)
+#define STEP42_CMD_TRACK_DEFAULT    (0x14U)
+#define STEP42_CMD_TRACK_QUERY      (0x15U)
 
 #define STEP42_STATUS_OK            (0x00U)
 #define STEP42_STATUS_BAD_LEN       (0x01U)
@@ -36,10 +42,17 @@ extern "C" {
 #define STEP42_STATUS_UNKNOWN_CMD   (0x03U)
 #define STEP42_STATUS_BAD_MODE      (0x04U)
 #define STEP42_STATUS_BUSY          (0x05U)
+#define STEP42_STATUS_DENIED        (0x06U)
 
 #define STEP42_MODE_OPEN_POSITION   (0x00U)
 #define STEP42_MODE_CLOSED_POSITION (0x01U)
 #define STEP42_MODE_OPEN_SPEED      (0x02U)
+#define STEP42_MODE_TRACK_PID       (0x03U)
+
+#define STEP42_BOARD_FACTORY_DEBUG  (0x00U)
+#define STEP42_BOARD_PWM            (0x01U)
+#define STEP42_BOARD_CAN            (0x02U)
+#define STEP42_BOARD_UART           (0x03U)
 
 #define STEP42_HOME_NEAREST         (0x00U)
 #define STEP42_HOME_POSITIVE        (0x01U)
@@ -90,6 +103,17 @@ typedef struct
     uint16_t closed_accel;
     uint8_t zero_valid;
     uint8_t home_mode;
+    uint8_t board_mode;
+    uint8_t sensor_flags;
+    float temperature_c;
+    float speed_rpm;
+    uint8_t tracking_mode;
+    uint8_t tracking_frequency_khz;
+    uint8_t tracking_speed_percent;
+    uint8_t tracking_accel_percent;
+    float tracking_primary_error;
+    float tracking_secondary_feedback;
+    int16_t tracking_output;
 } Step42_Status;
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);
@@ -136,6 +160,21 @@ uint16_t Step42_BuildSetStream(uint8_t *buf, uint16_t max_len, uint8_t seq, uint
 uint16_t Step42_BuildQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode);
 uint16_t Step42_BuildStop(uint8_t *buf, uint16_t max_len, uint8_t seq);
+uint16_t Step42_BuildTrackConfig(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                                uint8_t mode, uint8_t speed_percent,
+                                uint8_t accel_percent, uint8_t frequency_khz);
+uint16_t Step42_BuildTrackPid(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                             uint8_t loop, float kp, float ki, float kd);
+uint16_t Step42_BuildTrackAdvanced(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                                  float filter_alpha, float gain_min,
+                                  float gain_max, float full_error,
+                                  uint16_t prediction_ms, uint16_t timeout_ms,
+                                  float single_deadband, float outer_deadband,
+                                  float inner_deadband);
+uint16_t Step42_BuildTrackInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                               float primary_error, float secondary_feedback);
+uint16_t Step42_BuildTrackDefaults(uint8_t *buf, uint16_t max_len, uint8_t seq);
+uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
 
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status);
 int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *status);

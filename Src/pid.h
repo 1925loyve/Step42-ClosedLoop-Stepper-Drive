@@ -28,6 +28,7 @@ void PID_Init(PID_t *pid,
 void PID_Reset(PID_t *pid);
 float PID_Update(PID_t *pid, float target, float feedback);
 float PID_UpdateLinear(PID_t *pid, float target, float feedback);
+float PID_UpdateError(PID_t *pid, float error);
 float PID_AngleErrorDeg(float target, float feedback);
 float PID_RawToDeg(uint16_t raw_angle);
 

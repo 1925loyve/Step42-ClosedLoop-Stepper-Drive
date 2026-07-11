@@ -24,7 +24,7 @@ WAVEFORM_PIXELS_PER_SECOND = 18
 
 REQ_SOF = b"\xA5\x5A"
 RESP_SOF = b"\x5A\xA5"
-MAX_PAYLOAD = 32
+MAX_PAYLOAD = 64
 
 CMD_PING = 0x01
 CMD_ENABLE = 0x02
@@ -41,15 +41,23 @@ CMD_CLOSED_ACCEL = 0x0C
 CMD_HOME_MODE = 0x0D
 CMD_SET_ZERO = 0x0E
 CMD_HOME = 0x0F
+CMD_TRACK_CONFIG = 0x10
+CMD_TRACK_PID = 0x11
+CMD_TRACK_ADVANCED = 0x12
+CMD_TRACK_INPUT = 0x13
+CMD_TRACK_DEFAULT = 0x14
+CMD_TRACK_QUERY = 0x15
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
 MODE_OPEN_SPEED = 2
+MODE_TRACK_PID = 3
 
 MODE_LABELS = {
     "速度模式": MODE_OPEN_SPEED,
     "开环位置": MODE_OPEN_POSITION,
     "闭环位置": MODE_CLOSED_POSITION,
+    "内置误差PID": MODE_TRACK_PID,
 }
 
 MODE_NAMES = {value: key for key, value in MODE_LABELS.items()}
@@ -61,7 +69,18 @@ STATUS_NAMES = {
     3: "未知命令",
     4: "当前模式不支持",
     5: "忙，请稍后再试",
+    6: "当前接口无权限",
 }
+
+BOARD_MODE_NAMES = {
+    0: "Factory Debug",
+    1: "PWM",
+    2: "CAN",
+    3: "UART",
+}
+
+TRACK_MODE_LABELS = {"单环PID": 1, "串级双环PID": 2}
+TRACK_MODE_NAMES = {value: key for key, value in TRACK_MODE_LABELS.items()}
 
 HOME_MODE_LABELS = {
     "就近回零": 0,
@@ -229,8 +248,8 @@ class AngleViewer(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Step42 二进制协议调试")
-        self.geometry("1280x760")
-        self.minsize(1120, 680)
+        self.geometry("1380x900")
+        self.minsize(1180, 760)
 
         self.frame_queue = queue.Queue()
         self.status_queue = queue.Queue()
@@ -258,6 +277,8 @@ class AngleViewer(tk.Tk):
         self.abs_deg_var = tk.StringVar(value="--")
         self.deg_var = tk.StringVar(value="--")
         self.rpm_var = tk.StringVar(value="--")
+        self.temp_var = tk.StringVar(value="--")
+        self.board_mode_var = tk.StringVar(value="--")
         self.mode_var = tk.StringVar(value="闭环位置")
         self.mode_status_var = tk.StringVar(value="模式：未知")
         self.enable_status_var = tk.StringVar(value="电机：未知")
@@ -283,6 +304,31 @@ class AngleViewer(tk.Tk):
         self.speed_var = tk.StringVar(value="0")
         self.accel_var = tk.StringVar(value="3000")
         self.speed_status_var = tk.StringVar(value="速度：未发送")
+        self.track_mode_var = tk.StringVar(value="单环PID")
+        self.track_speed_pct_var = tk.StringVar(value="100")
+        self.track_accel_pct_var = tk.StringVar(value="100")
+        self.track_freq_var = tk.StringVar(value="1")
+        self.track_single_kp_var = tk.StringVar(value="180.0")
+        self.track_single_ki_var = tk.StringVar(value="0.2")
+        self.track_single_kd_var = tk.StringVar(value="0.0")
+        self.track_outer_kp_var = tk.StringVar(value="1.0")
+        self.track_outer_ki_var = tk.StringVar(value="0.0")
+        self.track_outer_kd_var = tk.StringVar(value="0.0")
+        self.track_inner_kp_var = tk.StringVar(value="180.0")
+        self.track_inner_ki_var = tk.StringVar(value="0.2")
+        self.track_inner_kd_var = tk.StringVar(value="0.0")
+        self.track_primary_var = tk.StringVar(value="0.0")
+        self.track_secondary_var = tk.StringVar(value="0.0")
+        self.track_status_var = tk.StringVar(value="误差PID：等待读取")
+        self.track_filter_var = tk.StringVar(value="0.25")
+        self.track_gain_min_var = tk.StringVar(value="1.0")
+        self.track_gain_max_var = tk.StringVar(value="1.0")
+        self.track_full_error_var = tk.StringVar(value="10.0")
+        self.track_prediction_var = tk.StringVar(value="0")
+        self.track_timeout_var = tk.StringVar(value="250")
+        self.track_single_dead_var = tk.StringVar(value="0.08")
+        self.track_outer_dead_var = tk.StringVar(value="0.08")
+        self.track_inner_dead_var = tk.StringVar(value="0.08")
 
         self._build_ui()
         self.refresh_ports(auto_connect=True)
@@ -328,10 +374,11 @@ class AngleViewer(tk.Tk):
         data = ttk.Frame(root)
         data.pack(fill=tk.X, pady=(18, 0))
         for col, (title, var) in enumerate(
-            [("Raw", self.raw_var), ("绝对角度", self.abs_deg_var), ("零点角度", self.deg_var), ("RPM", self.rpm_var)]
+            [("Raw", self.raw_var), ("绝对角度", self.abs_deg_var), ("零点角度", self.deg_var),
+             ("RPM", self.rpm_var), ("温度", self.temp_var), ("接口模式", self.board_mode_var)]
         ):
-            ttk.Label(data, text=title, font=("Segoe UI", 12)).grid(row=0, column=col, sticky=tk.W, padx=(0 if col == 0 else 36, 0))
-            ttk.Label(data, textvariable=var, font=("Consolas", 28, "bold")).grid(row=1, column=col, sticky=tk.W, padx=(0 if col == 0 else 36, 0))
+            ttk.Label(data, text=title, font=("Segoe UI", 10)).grid(row=0, column=col, sticky=tk.W, padx=(0 if col == 0 else 22, 0))
+            ttk.Label(data, textvariable=var, font=("Consolas", 20, "bold")).grid(row=1, column=col, sticky=tk.W, padx=(0 if col == 0 else 22, 0))
             data.columnconfigure(col, weight=1)
 
         body = ttk.Frame(root)
@@ -344,7 +391,7 @@ class AngleViewer(tk.Tk):
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         right = ttk.Frame(body)
         right.grid(row=0, column=1, sticky="nsew")
-        right.rowconfigure(2, weight=1)
+        right.rowconfigure(3, weight=1)
         right.columnconfigure(0, weight=1)
 
         mode = ttk.LabelFrame(left, text="工作模式 / 驱动参数")
@@ -421,8 +468,40 @@ class AngleViewer(tk.Tk):
         ttk.Label(pid, textvariable=self.pid_status_var).grid(row=2, column=0, columnspan=6, padx=8, pady=(0, 8), sticky=tk.W)
         ttk.Label(pid, textvariable=self.closed_accel_status_var).grid(row=3, column=0, columnspan=6, padx=8, pady=(0, 8), sticky=tk.W)
 
+        tracking = ttk.LabelFrame(right, text="内置误差PID（追踪模式固定32细分+插值）")
+        tracking.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        ttk.Combobox(tracking, textvariable=self.track_mode_var,
+                     values=list(TRACK_MODE_LABELS.keys()), width=12,
+                     state="readonly").grid(row=0, column=0, padx=8, pady=6)
+        for col, (label, var) in enumerate((("速度%", self.track_speed_pct_var),
+                                            ("加速度%", self.track_accel_pct_var),
+                                            ("频率kHz", self.track_freq_var))):
+            ttk.Label(tracking, text=label).grid(row=0, column=1 + col * 2, padx=(4, 2), pady=6)
+            ttk.Entry(tracking, textvariable=var, width=6).grid(row=0, column=2 + col * 2, padx=(0, 6), pady=6)
+        ttk.Button(tracking, text="写入基础", command=self.send_track_basic).grid(row=0, column=7, padx=4, pady=6)
+        ttk.Button(tracking, text="恢复默认", command=self.send_track_defaults).grid(row=0, column=8, padx=4, pady=6)
+        ttk.Button(tracking, text="高级参数", command=self.open_track_advanced).grid(row=0, column=9, padx=(4, 8), pady=6)
+
+        pid_rows = (("单环", self.track_single_kp_var, self.track_single_ki_var, self.track_single_kd_var, 0),
+                    ("外环", self.track_outer_kp_var, self.track_outer_ki_var, self.track_outer_kd_var, 1),
+                    ("内环", self.track_inner_kp_var, self.track_inner_ki_var, self.track_inner_kd_var, 2))
+        for row, (name, kp_var, ki_var, kd_var, loop_id) in enumerate(pid_rows, start=1):
+            ttk.Label(tracking, text=name).grid(row=row, column=0, padx=8, pady=3, sticky=tk.W)
+            for col, (label, var) in enumerate((("Kp", kp_var), ("Ki", ki_var), ("Kd", kd_var))):
+                ttk.Label(tracking, text=label).grid(row=row, column=1 + col * 2, padx=(4, 2), pady=3)
+                ttk.Entry(tracking, textvariable=var, width=8).grid(row=row, column=2 + col * 2, padx=(0, 6), pady=3)
+            ttk.Button(tracking, text="写入", command=lambda loop=loop_id: self.send_track_pid(loop)).grid(row=row, column=7, padx=4, pady=3)
+
+        ttk.Label(tracking, text="主误差").grid(row=4, column=0, padx=8, pady=6, sticky=tk.W)
+        ttk.Entry(tracking, textvariable=self.track_primary_var, width=8).grid(row=4, column=1, columnspan=2, padx=4, pady=6)
+        ttk.Label(tracking, text="内环反馈").grid(row=4, column=3, padx=4, pady=6)
+        ttk.Entry(tracking, textvariable=self.track_secondary_var, width=8).grid(row=4, column=4, columnspan=2, padx=4, pady=6)
+        ttk.Button(tracking, text="发送测试误差", command=self.send_track_input).grid(row=4, column=7, padx=4, pady=6)
+        ttk.Button(tracking, text="读取追踪参数", command=self.send_track_query).grid(row=4, column=8, padx=4, pady=6)
+        ttk.Label(tracking, textvariable=self.track_status_var).grid(row=5, column=0, columnspan=10, padx=8, pady=(2, 6), sticky=tk.W)
+
         wave = ttk.LabelFrame(right, text="目标/当前角度波形")
-        wave.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
+        wave.grid(row=3, column=0, sticky="nsew", pady=(12, 0))
         wave_toolbar = ttk.Frame(wave)
         wave_toolbar.pack(fill=tk.X, padx=8, pady=(8, 4))
         ttk.Checkbutton(wave_toolbar, text="暂停波形", variable=self.wave_paused_var).pack(side=tk.LEFT)
@@ -660,6 +739,111 @@ class AngleViewer(tk.Tk):
             self._append_wave_sample(time.monotonic())
             self.angle_status_var.set(f"角度：已发送 {angle:.3f}°")
 
+    def send_track_basic(self):
+        try:
+            mode = TRACK_MODE_LABELS[self.track_mode_var.get()]
+            speed_pct = int(self.track_speed_pct_var.get())
+            accel_pct = int(self.track_accel_pct_var.get())
+            frequency = int(self.track_freq_var.get())
+        except (ValueError, KeyError):
+            self.track_status_var.set("误差PID：基础参数格式错误")
+            return
+        if not (1 <= speed_pct <= 100 and 1 <= accel_pct <= 100 and 1 <= frequency <= 10):
+            self.track_status_var.set("误差PID：速度/加速度为1~100%，频率为1~10kHz")
+            return
+        if self._send(CMD_TRACK_CONFIG, struct.pack("<BBBB", mode, speed_pct, accel_pct, frequency)):
+            self.track_status_var.set(
+                f"误差PID：已发送 {self.track_mode_var.get()}，速度{speed_pct}%={speed_pct * 50}，"
+                f"加速度{accel_pct}%={accel_pct * 100}，{frequency}kHz"
+            )
+
+    def send_track_pid(self, loop):
+        variables = (
+            (self.track_single_kp_var, self.track_single_ki_var, self.track_single_kd_var),
+            (self.track_outer_kp_var, self.track_outer_ki_var, self.track_outer_kd_var),
+            (self.track_inner_kp_var, self.track_inner_ki_var, self.track_inner_kd_var),
+        )
+        try:
+            kp, ki, kd = (float(var.get()) for var in variables[loop])
+        except (ValueError, IndexError):
+            self.track_status_var.set("误差PID：PID参数格式错误")
+            return
+        if min(kp, ki, kd) < 0 or max(kp, ki, kd) > 5000:
+            self.track_status_var.set("误差PID：Kp/Ki/Kd范围为0~5000")
+            return
+        payload = struct.pack("<Biii", loop, int(round(kp * 100)), int(round(ki * 100)), int(round(kd * 100)))
+        if self._send(CMD_TRACK_PID, payload):
+            self.track_status_var.set(f"误差PID：已发送第{loop + 1}组PID")
+
+    def send_track_input(self):
+        if self.current_mode != MODE_TRACK_PID:
+            self.track_status_var.set("误差PID：请先把工作模式设置为内置误差PID")
+            return
+        try:
+            primary = float(self.track_primary_var.get())
+            secondary = float(self.track_secondary_var.get())
+        except ValueError:
+            self.track_status_var.set("误差PID：误差输入格式错误")
+            return
+        if not (-327.68 <= primary <= 327.67 and -327.68 <= secondary <= 327.67):
+            self.track_status_var.set("误差PID：输入范围为-327.68~327.67")
+            return
+        payload = struct.pack("<hh", int(round(primary * 100)), int(round(secondary * 100)))
+        if self._send(CMD_TRACK_INPUT, payload):
+            self.track_status_var.set(f"误差PID：已发送主误差{primary:.2f}，内环反馈{secondary:.2f}")
+
+    def send_track_defaults(self):
+        if self._send(CMD_TRACK_DEFAULT):
+            self.track_status_var.set("误差PID：已发送恢复默认请求")
+            self.after(120, self.send_track_query)
+
+    def send_track_query(self):
+        self._send(CMD_TRACK_QUERY)
+
+    def send_track_advanced(self):
+        try:
+            values = [
+                int(round(float(self.track_filter_var.get()) * 1000)),
+                int(round(float(self.track_gain_min_var.get()) * 1000)),
+                int(round(float(self.track_gain_max_var.get()) * 1000)),
+                int(round(float(self.track_full_error_var.get()) * 100)),
+                int(round(float(self.track_prediction_var.get()))),
+                int(round(float(self.track_timeout_var.get()))),
+                int(round(float(self.track_single_dead_var.get()) * 1000)),
+                int(round(float(self.track_outer_dead_var.get()) * 1000)),
+                int(round(float(self.track_inner_dead_var.get()) * 1000)),
+            ]
+        except ValueError:
+            self.track_status_var.set("误差PID：高级参数格式错误")
+            return
+        if any(value < 0 or value > 65535 for value in values):
+            self.track_status_var.set("误差PID：高级参数超出协议范围")
+            return
+        if self._send(CMD_TRACK_ADVANCED, struct.pack("<9H", *values)):
+            self.track_status_var.set("误差PID：已发送高级参数")
+
+    def open_track_advanced(self):
+        window = tk.Toplevel(self)
+        window.title("误差PID高级参数")
+        window.resizable(False, False)
+        fields = [
+            ("误差滤波系数 0~1", self.track_filter_var),
+            ("动态增益最小值", self.track_gain_min_var),
+            ("动态增益最大值", self.track_gain_max_var),
+            ("达到最大增益的误差", self.track_full_error_var),
+            ("预测时间 ms", self.track_prediction_var),
+            ("输入超时 ms", self.track_timeout_var),
+            ("单环死区", self.track_single_dead_var),
+            ("外环死区", self.track_outer_dead_var),
+            ("内环死区", self.track_inner_dead_var),
+        ]
+        for row, (label, var) in enumerate(fields):
+            ttk.Label(window, text=label).grid(row=row, column=0, padx=12, pady=6, sticky=tk.W)
+            ttk.Entry(window, textvariable=var, width=14).grid(row=row, column=1, padx=12, pady=6)
+        ttk.Button(window, text="写入高级参数", command=self.send_track_advanced).grid(
+            row=len(fields), column=0, columnspan=2, padx=12, pady=12
+        )
+
     def _auto_refresh_ports(self):
         self.refresh_ports(auto_connect=True)
         self.after(1000, self._auto_refresh_ports)
@@ -679,8 +863,8 @@ class AngleViewer(tk.Tk):
                 break
             self.status_var.set(message)
             if kind == "connected":
-                self.after(100, lambda: self._send(CMD_STREAM, b"\x01"))
-                self.after(160, self.send_query)
+                self.after(100, self.send_query)
+                self.after(160, self.send_track_query)
             if kind in ("closed", "error"):
                 self.connected_port = None
 
@@ -707,7 +891,50 @@ class AngleViewer(tk.Tk):
                 home_mode = payload[31]
             elif len(payload) >= 22:
                 microsteps = struct.unpack("<H", payload[20:22])[0]
-            self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0, pid_output, pid_params, microsteps, closed_accel, zero_valid, home_mode)
+            extended = None
+            if len(payload) >= 48:
+                board_mode = payload[32]
+                sensor_flags = payload[33]
+                temp_cdeg, rpm_x10 = struct.unpack("<hh", payload[34:38])
+                track_mode, track_freq, track_speed, track_accel = struct.unpack("<BBBB", payload[38:42])
+                primary_x100, secondary_x100, track_output = struct.unpack("<hhh", payload[42:48])
+                extended = (board_mode, sensor_flags, temp_cdeg / 100.0, rpm_x10 / 10.0,
+                            track_mode, track_freq, track_speed, track_accel,
+                            primary_x100 / 100.0, secondary_x100 / 100.0, track_output)
+            self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0,
+                                 pid_output, pid_params, microsteps, closed_accel,
+                                 zero_valid, home_mode, extended)
+            return
+        if cmd == CMD_TRACK_QUERY and len(payload) >= 59:
+            if payload[0] != 0:
+                self.track_status_var.set(f"误差PID：{STATUS_NAMES.get(payload[0], payload[0])}")
+                return
+            mode, speed_pct, accel_pct, frequency = struct.unpack("<BBBB", payload[1:5])
+            pid_values = struct.unpack("<9i", payload[5:41])
+            advanced = struct.unpack("<9H", payload[41:59])
+            self.track_mode_var.set(TRACK_MODE_NAMES.get(mode, "单环PID"))
+            self.track_speed_pct_var.set(str(speed_pct))
+            self.track_accel_pct_var.set(str(accel_pct))
+            self.track_freq_var.set(str(frequency))
+            variables = (
+                self.track_single_kp_var, self.track_single_ki_var, self.track_single_kd_var,
+                self.track_outer_kp_var, self.track_outer_ki_var, self.track_outer_kd_var,
+                self.track_inner_kp_var, self.track_inner_ki_var, self.track_inner_kd_var,
+            )
+            for var, value in zip(variables, pid_values):
+                var.set(f"{value / 100.0:.2f}")
+            advanced_vars = (
+                self.track_filter_var, self.track_gain_min_var, self.track_gain_max_var,
+                self.track_full_error_var, self.track_prediction_var, self.track_timeout_var,
+                self.track_single_dead_var, self.track_outer_dead_var, self.track_inner_dead_var,
+            )
+            scales = (1000.0, 1000.0, 1000.0, 100.0, 1.0, 1.0, 1000.0, 1000.0, 1000.0)
+            for var, value, scale in zip(advanced_vars, advanced, scales):
+                var.set(f"{value / scale:g}")
+            self.track_status_var.set(
+                f"误差PID：{TRACK_MODE_NAMES.get(mode, '未知')}，速度{speed_pct}%={speed_pct * 50}，"
+                f"加速度{accel_pct}%={accel_pct * 100}，{frequency}kHz"
+            )
             return
         if payload:
             status = payload[0]
@@ -738,11 +965,20 @@ class AngleViewer(tk.Tk):
                 self.home_status_var.set(f"设置零点：{text}")
             elif cmd == CMD_HOME:
                 self.home_status_var.set(f"回零：{text}")
+            elif cmd in (CMD_TRACK_CONFIG, CMD_TRACK_PID, CMD_TRACK_ADVANCED,
+                          CMD_TRACK_INPUT, CMD_TRACK_DEFAULT, CMD_TRACK_QUERY):
+                self.track_status_var.set(f"误差PID：{text}")
         self._send(CMD_QUERY)
 
-    def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output, pid_params=None, microsteps=None, closed_accel=None, zero_valid=None, home_mode=None):
+    def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output,
+                        pid_params=None, microsteps=None, closed_accel=None,
+                        zero_valid=None, home_mode=None, extended=None):
         now = time.monotonic()
-        rpm = self._calc_rpm(raw, now)
+        rpm = None
+        if extended is None:
+            rpm = self._calc_rpm(raw, now)
+        else:
+            rpm = extended[3]
         abs_deg = (float(raw & 0x3FFF) * 360.0) / RAW_MAX
         self.current_angle_deg = deg
         self.raw_var.set(f"{raw:5d}")
@@ -767,6 +1003,19 @@ class AngleViewer(tk.Tk):
             kp, ki, kd, limit, deadband = pid_params
             self.pid_status_var.set(
                 f"PID：当前 Kp={kp:.2f}, Ki={ki:.2f}, Kd={kd:.2f}, Limit={limit}, Deadband={deadband:.3f}"
+            )
+        if extended is not None:
+            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output = extended
+            self.board_mode_var.set(BOARD_MODE_NAMES.get(board_mode, f"未知{board_mode}"))
+            if sensor_flags & 0x01:
+                suffix = " 关断" if sensor_flags & 0x04 else (" 警告" if sensor_flags & 0x02 else "")
+                self.temp_var.set(f"{temperature:.1f}°C{suffix}")
+            else:
+                self.temp_var.set("传感器异常")
+            self.track_status_var.set(
+                f"误差PID：{TRACK_MODE_NAMES.get(track_mode, '未知')}，{track_freq}kHz，"
+                f"速度{track_speed}% / 加速度{track_accel}%，误差{primary:.2f}，"
+                f"内环反馈{secondary:.2f}，输出{track_output}"
             )
         if status != 0:
             self.status_var.set(f"设备状态错误：{status}")
@@ -808,6 +1057,8 @@ class AngleViewer(tk.Tk):
         self.rpm_filtered = 0.0
         self.last_rpm_display_time = 0.0
         self.rpm_var.set("--")
+        self.temp_var.set("--")
+        self.board_mode_var.set("--")
         self.abs_deg_var.set("--")
         self.deg_var.set("--")
         self.current_angle_deg = None

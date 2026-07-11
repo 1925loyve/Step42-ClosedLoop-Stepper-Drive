@@ -821,6 +821,46 @@
               <FileType>5</FileType>
               <FilePath>..\Src\Step42App.h</FilePath>
             </File>
+            <File>
+              <FileName>Step42BoardMode.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\Step42BoardMode.c</FilePath>
+            </File>
+            <File>
+              <FileName>Step42BoardMode.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Src\Step42BoardMode.h</FilePath>
+            </File>
+            <File>
+              <FileName>Step42Sensors.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\Step42Sensors.c</FilePath>
+            </File>
+            <File>
+              <FileName>Step42Sensors.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Src\Step42Sensors.h</FilePath>
+            </File>
+            <File>
+              <FileName>Step42Tracking.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\Step42Tracking.c</FilePath>
+            </File>
+            <File>
+              <FileName>Step42Tracking.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Src\Step42Tracking.h</FilePath>
+            </File>
+            <File>
+              <FileName>Step42PwmInput.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\Step42PwmInput.c</FilePath>
+            </File>
+            <File>
+              <FileName>Step42PwmInput.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Src\Step42PwmInput.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

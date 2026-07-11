@@ -85,7 +85,11 @@ float PID_Update(PID_t *pid, float target, float feedback)
 
 float PID_UpdateLinear(PID_t *pid, float target, float feedback)
 {
-    float error;
+    return PID_UpdateError(pid, target - feedback);
+}
+
+float PID_UpdateError(PID_t *pid, float error)
+{
     float derivative;
     float output;
 
@@ -94,7 +98,6 @@ float PID_UpdateLinear(PID_t *pid, float target, float feedback)
         return 0.0f;
     }
 
-    error = target - feedback;
     if ((error < pid->deadband) && (error > -pid->deadband))
     {
         pid->prev_error = error;

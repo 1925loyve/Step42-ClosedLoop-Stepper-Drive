@@ -737,6 +737,11 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   Step42App_UARTErrorCallback(huart);
 }
 
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+  Step42App_TIMCaptureCallback(htim);
+}
+
 /* USER CODE END 4 */
 
 /**

@@ -120,15 +120,51 @@ if (Step42_ParseByte(&parser, rx_byte, &resp) == STEP42_PARSE_FRAME)
 STEP42_MODE_OPEN_POSITION    fixed open-loop step move to angle
 STEP42_MODE_CLOSED_POSITION  encoder PID position control
 STEP42_MODE_OPEN_SPEED       open-loop continuous speed
-STEP42_MODE_CLOSED_SPEED     encoder feedback weak speed control
+STEP42_MODE_TRACK_PID        external-error tracking PID, fixed 32 microsteps
 ```
 
 Set the mode first, then send angle or speed:
 
 ```c
-len = Step42_BuildSetMode(tx, sizeof(tx), ++seq, STEP42_MODE_CLOSED_SPEED);
+len = Step42_BuildSetMode(tx, sizeof(tx), ++seq, STEP42_MODE_OPEN_SPEED);
 uart_send(tx, len);
 
 len = Step42_BuildSetSpeed(tx, sizeof(tx), ++seq, 1000, 3000);
 uart_send(tx, len);
+```
+
+## Tracking PID
+
+The tracking controller accepts either one error loop or a cascade controller.
+For cascade control, `primary_error` is normally the slower vision error and
+`secondary_feedback` is the faster gyro/rate feedback.
+
+```c
+len = Step42_BuildSetMode(tx, sizeof(tx), ++seq, STEP42_MODE_TRACK_PID);
+uart_send(tx, len);
+
+/* mode=1 single loop, speed=100%, accel=100%, loop=1 kHz */
+len = Step42_BuildTrackConfig(tx, sizeof(tx), ++seq, 1, 100, 100, 1);
+uart_send(tx, len);
+
+len = Step42_BuildTrackPid(tx, sizeof(tx), ++seq, 0, 180.0f, 0.2f, 0.0f);
+uart_send(tx, len);
+
+len = Step42_BuildTrackInput(tx, sizeof(tx), ++seq, vision_error, gyro_feedback);
+uart_send(tx, len);
+```
+
+The UART data stream is disabled after reset. Send `Step42_BuildSetStream()`
+only when continuous status telemetry is needed.
+
+## DIP Transport Modes
+
+The two switch inputs are sampled once during startup. With `MS1` as the high
+bit and `MS2` as the low bit:
+
+```text
+MS1 MS2 = 1 1  ERROR UART
+MS1 MS2 = 0 1  PWM input
+MS1 MS2 = 1 0  CAN
+MS1 MS2 = 0 0  Factory Debug UART
 ```
