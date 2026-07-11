@@ -35,6 +35,7 @@ extern "C" {
 #define STEP42_CMD_TRACK_INPUT      (0x13U)
 #define STEP42_CMD_TRACK_DEFAULT    (0x14U)
 #define STEP42_CMD_TRACK_QUERY      (0x15U)
+#define STEP42_CMD_CHOPPER_MODE     (0x16U)
 
 #define STEP42_STATUS_OK            (0x00U)
 #define STEP42_STATUS_BAD_LEN       (0x01U)
@@ -114,6 +115,7 @@ typedef struct
     float tracking_primary_error;
     float tracking_secondary_feedback;
     int16_t tracking_output;
+    uint8_t chopper_mode;
 } Step42_Status;
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);
@@ -175,6 +177,8 @@ uint16_t Step42_BuildTrackInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                float primary_error, float secondary_feedback);
 uint16_t Step42_BuildTrackDefaults(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
+uint16_t Step42_BuildSetChopperMode(uint8_t *buf, uint16_t max_len,
+                                   uint8_t seq, uint8_t mode);
 
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status);
 int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *status);

@@ -536,6 +536,20 @@ uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq)
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_QUERY, seq, 0, 0U);
 }
 
+uint16_t Step42_BuildSetChopperMode(uint8_t *buf, uint16_t max_len,
+                                   uint8_t seq, uint8_t mode)
+{
+    uint8_t payload[1];
+
+    if (mode > 1U)
+    {
+        return 0U;
+    }
+    payload[0] = mode;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_CHOPPER_MODE, seq,
+                             payload, sizeof(payload));
+}
+
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status)
 {
     if ((response == 0) || (status == 0) || (response->len < 1U))
@@ -602,6 +616,10 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
         status->tracking_primary_error = ((float)Step42_ReadI16(response->payload, 42U)) / 100.0f;
         status->tracking_secondary_feedback = ((float)Step42_ReadI16(response->payload, 44U)) / 100.0f;
         status->tracking_output = Step42_ReadI16(response->payload, 46U);
+    }
+    if (response->len >= 49U)
+    {
+        status->chopper_mode = response->payload[48];
     }
     return 0;
 }

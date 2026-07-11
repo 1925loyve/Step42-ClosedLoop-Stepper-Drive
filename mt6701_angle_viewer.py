@@ -47,6 +47,7 @@ CMD_TRACK_ADVANCED = 0x12
 CMD_TRACK_INPUT = 0x13
 CMD_TRACK_DEFAULT = 0x14
 CMD_TRACK_QUERY = 0x15
+CMD_CHOPPER_MODE = 0x16
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -81,6 +82,8 @@ BOARD_MODE_NAMES = {
 
 TRACK_MODE_LABELS = {"单环PID": 1, "串级双环PID": 2}
 TRACK_MODE_NAMES = {value: key for key, value in TRACK_MODE_LABELS.items()}
+CHOPPER_MODE_LABELS = {"静音 StealthChop": 0, "力矩 SpreadCycle": 1}
+CHOPPER_MODE_NAMES = {value: key for key, value in CHOPPER_MODE_LABELS.items()}
 
 HOME_MODE_LABELS = {
     "就近回零": 0,
@@ -268,6 +271,7 @@ class AngleViewer(tk.Tk):
         self.wave_paused_var = tk.BooleanVar(value=False)
         self.wave_follow_var = tk.BooleanVar(value=True)
         self.current_mode = MODE_CLOSED_POSITION
+        self.current_microsteps = 32
 
         self.port_var = tk.StringVar()
         self.baud_var = tk.StringVar(value=str(BAUD_DEFAULT))
@@ -281,6 +285,7 @@ class AngleViewer(tk.Tk):
         self.board_mode_var = tk.StringVar(value="--")
         self.mode_var = tk.StringVar(value="闭环位置")
         self.mode_status_var = tk.StringVar(value="模式：未知")
+        self.driver_status_var = tk.StringVar(value="实际驱动状态：等待读取")
         self.enable_status_var = tk.StringVar(value="电机：未知")
         self.stream_status_var = tk.StringVar(value="数据流：未知")
         self.microstep_var = tk.StringVar(value="32")
@@ -302,8 +307,11 @@ class AngleViewer(tk.Tk):
         self.move_accel_var = tk.StringVar(value="5000")
         self.move_status_var = tk.StringVar(value="脉冲位置：未发送")
         self.speed_var = tk.StringVar(value="0")
+        self.speed_unit_var = tk.StringVar(value="RPM")
         self.accel_var = tk.StringVar(value="3000")
         self.speed_status_var = tk.StringVar(value="速度：未发送")
+        self.chopper_mode_var = tk.StringVar(value="静音 StealthChop")
+        self.chopper_status_var = tk.StringVar(value="斩波模式：未知")
         self.track_mode_var = tk.StringVar(value="单环PID")
         self.track_speed_pct_var = tk.StringVar(value="100")
         self.track_accel_pct_var = tk.StringVar(value="100")
@@ -410,6 +418,10 @@ class AngleViewer(tk.Tk):
         ttk.Button(drive, text="失能", command=lambda: self.send_enable(0)).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(drive, text="数据流开", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, padx=(16, 0))
         ttk.Button(drive, text="数据流关", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Combobox(drive, textvariable=self.chopper_mode_var,
+                     values=list(CHOPPER_MODE_LABELS.keys()), width=18,
+                     state="readonly").pack(side=tk.LEFT, padx=(16, 6))
+        ttk.Button(drive, text="设置斩波", command=self.send_chopper_mode).pack(side=tk.LEFT)
 
         mode_status = ttk.Frame(left)
         mode_status.pack(fill=tk.X, pady=(6, 0))
@@ -417,12 +429,17 @@ class AngleViewer(tk.Tk):
         ttk.Label(mode_status, textvariable=self.microstep_status_var).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Label(mode_status, textvariable=self.enable_status_var).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Label(mode_status, textvariable=self.stream_status_var).pack(side=tk.LEFT)
+        ttk.Label(left, textvariable=self.driver_status_var).pack(anchor=tk.W, pady=(4, 0))
+        ttk.Label(left, textvariable=self.chopper_status_var).pack(anchor=tk.W, pady=(2, 0))
 
         speed = ttk.LabelFrame(left, text="速度模式")
         speed.pack(fill=tk.X, pady=(12, 0))
-        ttk.Label(speed, text="Speed -5000~5000").pack(side=tk.LEFT, padx=(8, 6), pady=8)
+        ttk.Label(speed, text="目标速度").pack(side=tk.LEFT, padx=(8, 6), pady=8)
         ttk.Entry(speed, textvariable=self.speed_var, width=10).pack(side=tk.LEFT, padx=(0, 8), pady=8)
-        ttk.Label(speed, text="Accel").pack(side=tk.LEFT, padx=(0, 6), pady=8)
+        ttk.Combobox(speed, textvariable=self.speed_unit_var,
+                     values=["RPM", "脉冲/s"], width=8,
+                     state="readonly").pack(side=tk.LEFT, padx=(0, 8), pady=8)
+        ttk.Label(speed, text="加速度 脉冲/s²").pack(side=tk.LEFT, padx=(0, 6), pady=8)
         ttk.Entry(speed, textvariable=self.accel_var, width=10).pack(side=tk.LEFT, padx=(0, 8), pady=8)
         ttk.Button(speed, text="运行速度", command=self.send_speed_value).pack(side=tk.LEFT, padx=(0, 8), pady=8)
         ttk.Button(speed, text="停止", command=self.send_stop).pack(side=tk.LEFT, padx=(0, 12), pady=8)
@@ -644,6 +661,14 @@ class AngleViewer(tk.Tk):
         if self._send(CMD_STREAM, struct.pack("<B", 1 if enable else 0)):
             self.stream_status_var.set("数据流：已发送开启" if enable else "数据流：已发送关闭")
 
+    def send_chopper_mode(self):
+        mode = CHOPPER_MODE_LABELS.get(self.chopper_mode_var.get())
+        if mode is None:
+            self.chopper_status_var.set("斩波模式：选择无效")
+            return
+        if self._send(CMD_CHOPPER_MODE, struct.pack("<B", mode)):
+            self.chopper_status_var.set(f"斩波模式：已发送 {self.chopper_mode_var.get()}")
+
     def send_query(self):
         self._send(CMD_QUERY)
 
@@ -688,17 +713,27 @@ class AngleViewer(tk.Tk):
             self.speed_status_var.set("速度：当前不是速度模式，先设置为速度模式")
             return
         try:
-            speed = int(float(self.speed_var.get()))
+            requested_speed = float(self.speed_var.get())
             accel = int(float(self.accel_var.get()))
         except ValueError:
             self.speed_status_var.set("速度：请输入有效数字")
             return
+        if self.speed_unit_var.get() == "RPM":
+            speed = int(round(requested_speed * 200.0 * self.current_microsteps / 60.0))
+        else:
+            speed = int(round(requested_speed))
         if speed < -5000 or speed > 5000 or accel <= 0:
-            self.speed_status_var.set("速度：参数超范围")
+            max_rpm = 5000.0 * 60.0 / (200.0 * self.current_microsteps)
+            self.speed_status_var.set(
+                f"速度：换算后{speed}脉冲/s超范围；当前{self.current_microsteps}细分最大约{max_rpm:.1f}RPM"
+            )
             return
         payload = struct.pack("<hH", speed, accel)
         if self._send(CMD_SPEED, payload):
-            self.speed_status_var.set(f"速度：已发送 speed={speed}, accel={accel}")
+            rpm = speed * 60.0 / (200.0 * self.current_microsteps)
+            self.speed_status_var.set(
+                f"速度：已发送{speed}脉冲/s，理论{rpm:.1f}RPM，accel={accel}"
+            )
 
     def send_move_steps(self):
         if self.current_mode not in (MODE_OPEN_POSITION, MODE_CLOSED_POSITION):
@@ -898,9 +933,11 @@ class AngleViewer(tk.Tk):
                 temp_cdeg, rpm_x10 = struct.unpack("<hh", payload[34:38])
                 track_mode, track_freq, track_speed, track_accel = struct.unpack("<BBBB", payload[38:42])
                 primary_x100, secondary_x100, track_output = struct.unpack("<hhh", payload[42:48])
+                chopper_mode = payload[48] if len(payload) >= 49 else None
                 extended = (board_mode, sensor_flags, temp_cdeg / 100.0, rpm_x10 / 10.0,
                             track_mode, track_freq, track_speed, track_accel,
-                            primary_x100 / 100.0, secondary_x100 / 100.0, track_output)
+                            primary_x100 / 100.0, secondary_x100 / 100.0,
+                            track_output, chopper_mode)
             self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0,
                                  pid_output, pid_params, microsteps, closed_accel,
                                  zero_valid, home_mode, extended)
@@ -968,6 +1005,8 @@ class AngleViewer(tk.Tk):
             elif cmd in (CMD_TRACK_CONFIG, CMD_TRACK_PID, CMD_TRACK_ADVANCED,
                           CMD_TRACK_INPUT, CMD_TRACK_DEFAULT, CMD_TRACK_QUERY):
                 self.track_status_var.set(f"误差PID：{text}")
+            elif cmd == CMD_CHOPPER_MODE:
+                self.chopper_status_var.set(f"斩波模式：{text}")
         self._send(CMD_QUERY)
 
     def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output,
@@ -991,8 +1030,12 @@ class AngleViewer(tk.Tk):
         self.enable_status_var.set("电机：已使能" if enabled else "电机：已失能")
         self.stream_status_var.set("数据流：开启" if stream else "数据流：关闭")
         self.current_mode = mode
+        if mode in MODE_NAMES:
+            self.mode_var.set(MODE_NAMES[mode])
         self.mode_status_var.set(f"模式：{MODE_NAMES.get(mode, '未知')}")
         if microsteps is not None:
+            self.current_microsteps = microsteps
+            self.microstep_var.set(str(microsteps))
             self.microstep_status_var.set(f"细分：当前 {microsteps}")
         if closed_accel is not None:
             self.closed_accel_status_var.set(f"闭环加速度：当前 {closed_accel}")
@@ -1005,7 +1048,7 @@ class AngleViewer(tk.Tk):
                 f"PID：当前 Kp={kp:.2f}, Ki={ki:.2f}, Kd={kd:.2f}, Limit={limit}, Deadband={deadband:.3f}"
             )
         if extended is not None:
-            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output = extended
+            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode = extended
             self.board_mode_var.set(BOARD_MODE_NAMES.get(board_mode, f"未知{board_mode}"))
             if sensor_flags & 0x01:
                 suffix = " 关断" if sensor_flags & 0x04 else (" 警告" if sensor_flags & 0x02 else "")
@@ -1016,6 +1059,15 @@ class AngleViewer(tk.Tk):
                 f"误差PID：{TRACK_MODE_NAMES.get(track_mode, '未知')}，{track_freq}kHz，"
                 f"速度{track_speed}% / 加速度{track_accel}%，误差{primary:.2f}，"
                 f"内环反馈{secondary:.2f}，输出{track_output}"
+            )
+            if chopper_mode is not None:
+                chopper_name = CHOPPER_MODE_NAMES.get(chopper_mode, f"未知{chopper_mode}")
+                self.chopper_mode_var.set(chopper_name)
+                self.chopper_status_var.set(f"斩波模式：当前 {chopper_name}")
+            else:
+                chopper_name = "旧固件未知"
+            self.driver_status_var.set(
+                f"实际驱动状态：{MODE_NAMES.get(mode, '未知')} | {self.current_microsteps}细分 | {chopper_name}"
             )
         if status != 0:
             self.status_var.set(f"设备状态错误：{status}")

@@ -157,6 +157,14 @@ uart_send(tx, len);
 The UART data stream is disabled after reset. Send `Step42_BuildSetStream()`
 only when continuous status telemetry is needed.
 
+Chopper mode can be selected without changing the current-reference source:
+
+```c
+/* 0: quiet StealthChop, 1: higher-torque SpreadCycle */
+len = Step42_BuildSetChopperMode(tx, sizeof(tx), ++seq, 1);
+uart_send(tx, len);
+```
+
 ## DIP Transport Modes
 
 The two switch inputs are sampled once during startup. With `MS1` as the high

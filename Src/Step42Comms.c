@@ -4,6 +4,7 @@
 #include "Step42BoardMode.h"
 #include "Step42Sensors.h"
 #include "Step42Tracking.h"
+#include "Tmc2209.h"
 
 #define DEBUG_RAW_TX_INTERVAL_MS (20UL)
 
@@ -80,7 +81,7 @@ static int16_t Ctrl_ClampI16(float value)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[48];
+  uint8_t resp[49];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -140,6 +141,7 @@ void Step42Comms_SendQuery(uint8_t seq)
   Step42Slave_WriteI16(resp, 42U, Ctrl_ClampI16(Step42Tracking_GetPrimaryError() * 100.0f));
   Step42Slave_WriteI16(resp, 44U, Ctrl_ClampI16(Step42Tracking_GetSecondaryFeedback() * 100.0f));
   Step42Slave_WriteI16(resp, 46U, Ctrl_ClampI16(Step42Tracking_GetOutput()));
+  resp[48] = Tmc2209_GetChopperMode();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -606,6 +608,22 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_CHOPPER_MODE)
+  {
+    if (len != 1U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (Tmc2209_SetChopperMode(payload[0]) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
   Ctrl_SendStatus(cmd, seq, CTRL_STATUS_UNKNOWN_CMD);
 }
 
@@ -625,6 +643,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_INPUT:
   case CTRL_CMD_TRACK_DEFAULT:
   case CTRL_CMD_TRACK_QUERY:
+  case CTRL_CMD_CHOPPER_MODE:
     return 1U;
   default:
     return 0U;

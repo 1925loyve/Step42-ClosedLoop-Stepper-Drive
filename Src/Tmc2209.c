@@ -16,7 +16,7 @@ extern UART_HandleTypeDef huart1;
  * 3. VACTUAL     (0x22)  内部速度模式，这里固定为 0，不使用
  * 4. CHOPCONF    (0x6C)  细分/斩波核心配置
  */
-static const uint32_t TMC2209_GCONF_VALUE = 0x00000180;
+static const uint32_t TMC2209_GCONF_BASE_VALUE = 0x00000180;
 /*
  * CHOPCONF.MRES = 8 -> full-step external STEP input.
  * Change bits 24..27 to switch microstep resolution for precision tests.
@@ -25,6 +25,7 @@ static const uint32_t TMC2209_CHOPCONF_VALUE = 0x13000053;
 static const uint32_t TMC2209_IHOLD_IRUN_VALUE = 0x00060C04;
 static const uint32_t TMC2209_VACTUAL_VALUE = 0x00000000;
 static uint8_t tmc2209_active_addr = 0U;
+static uint8_t tmc2209_chopper_mode = TMC2209_CHOPPER_SILENT;
 
 static uint8_t TMC2209_MicrostepsToMres(uint16_t microsteps, uint8_t *mres)
 {
@@ -189,7 +190,8 @@ uint8_t Tmc2209_Init(uint8_t tmc_addr)
 {
     tmc2209_active_addr = tmc_addr;
     delay_ms(100);
-    TMC2209_WriteReg(tmc_addr, TMC2209_GCONF, TMC2209_GCONF_VALUE);
+    tmc2209_chopper_mode = TMC2209_CHOPPER_SILENT;
+    TMC2209_WriteReg(tmc_addr, TMC2209_GCONF, TMC2209_GCONF_BASE_VALUE);
     TMC2209_WriteReg(tmc_addr, TMC2209_CHOPCONF, TMC2209_CHOPCONF_VALUE);
     TMC2209_WriteReg(tmc_addr, TMC2209_IHOLD_IRUN, TMC2209_IHOLD_IRUN_VALUE);
     TMC2209_WriteReg(tmc_addr, TMC2209_VACTUAL, TMC2209_VACTUAL_VALUE);
@@ -244,6 +246,43 @@ uint8_t Tmc2209_SetMicrosteps(uint16_t microsteps)
     }
 
     return (((read_val >> 24) & 0x0FU) == mres) ? 1U : 0U;
+}
+
+uint8_t Tmc2209_SetChopperMode(uint8_t mode)
+{
+    uint32_t value;
+    uint32_t read_val = 0U;
+
+    if ((mode != TMC2209_CHOPPER_SILENT) &&
+        (mode != TMC2209_CHOPPER_TORQUE))
+    {
+        return 0U;
+    }
+
+    value = TMC2209_GCONF_BASE_VALUE;
+    if (mode == TMC2209_CHOPPER_TORQUE)
+    {
+        value |= (1UL << 2); /* GCONF.en_spreadCycle */
+    }
+
+    TMC2209_WriteReg(tmc2209_active_addr, TMC2209_GCONF, value);
+    delay_ms(2);
+    if (TMC2209_ReadReg_Robust(tmc2209_active_addr, TMC2209_GCONF, &read_val) == 0U)
+    {
+        return 0U;
+    }
+    if (((read_val >> 2) & 0x01U) != (uint32_t)mode)
+    {
+        return 0U;
+    }
+
+    tmc2209_chopper_mode = mode;
+    return 1U;
+}
+
+uint8_t Tmc2209_GetChopperMode(void)
+{
+    return tmc2209_chopper_mode;
 }
 
 uint8_t Tmc2209_InitAuto(uint8_t *detected_addr)

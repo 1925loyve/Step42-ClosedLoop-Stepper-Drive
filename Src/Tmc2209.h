@@ -13,9 +13,14 @@
 #define TMC2209_CHOPCONF   0x6C
 #define TMC2209_PWMCONF    0x70
 
+#define TMC2209_CHOPPER_SILENT 0U
+#define TMC2209_CHOPPER_TORQUE 1U
+
 uint8_t Tmc2209_Init(uint8_t tmc_addr);
 uint8_t Tmc2209_InitAuto(uint8_t *detected_addr);
 uint8_t Tmc2209_SetMicrosteps(uint16_t microsteps);
+uint8_t Tmc2209_SetChopperMode(uint8_t mode);
+uint8_t Tmc2209_GetChopperMode(void);
 
 
 #endif
