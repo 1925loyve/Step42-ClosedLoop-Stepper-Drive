@@ -59,10 +59,10 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define DEBUG_TX_Pin GPIO_PIN_2
-#define DEBUG_TX_GPIO_Port GPIOA
-#define DEBUG_RX_Pin GPIO_PIN_3
-#define DEBUG_RX_GPIO_Port GPIOA
+#define ERROR_TX_Pin GPIO_PIN_2
+#define ERROR_TX_GPIO_Port GPIOA
+#define ERROR_RX_Pin GPIO_PIN_3
+#define ERROR_RX_GPIO_Port GPIOA
 #define LED_RED_Pin GPIO_PIN_4
 #define LED_RED_GPIO_Port GPIOA
 #define MT6701_SCK_Pin GPIO_PIN_5
@@ -75,6 +75,12 @@ void Error_Handler(void);
 #define LED_BLUE_GPIO_Port GPIOB
 #define LED_WHITE_Pin GPIO_PIN_1
 #define LED_WHITE_GPIO_Port GPIOB
+#define DEBUG_TX_Pin GPIO_PIN_10
+#define DEBUG_TX_GPIO_Port GPIOB
+#define DEBUG_RX_Pin GPIO_PIN_11
+#define DEBUG_RX_GPIO_Port GPIOB
+#define TEMP_ADC_Pin GPIO_PIN_12
+#define TEMP_ADC_GPIO_Port GPIOB
 #define tmc_EN_Pin GPIO_PIN_14
 #define tmc_EN_GPIO_Port GPIOB
 #define tmc_DIR_Pin GPIO_PIN_15
@@ -85,8 +91,6 @@ void Error_Handler(void);
 #define TMC2209_TX_GPIO_Port GPIOA
 #define TMC2209_RX_Pin GPIO_PIN_10
 #define TMC2209_RX_GPIO_Port GPIOA
-#define PWM_IN_Pin GPIO_PIN_15
-#define PWM_IN_GPIO_Port GPIOA
 #define KEY1_Pin GPIO_PIN_3
 #define KEY1_GPIO_Port GPIOB
 #define KEY2_Pin GPIO_PIN_4
