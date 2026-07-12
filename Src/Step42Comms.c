@@ -16,6 +16,7 @@ extern UART_HandleTypeDef huart3;
 static Step42Slave_Parser_t error_parser;
 static Step42Slave_Parser_t debug_parser;
 static UART_HandleTypeDef *response_uart = &huart2;
+static UART_HandleTypeDef *stream_uart = &huart3;
 static uint8_t error_rx_buffer[CTRL_RX_BUFFER_SIZE];
 static uint8_t debug_rx_buffer[CTRL_RX_BUFFER_SIZE];
 static volatile uint16_t error_rx_head = 0U;
@@ -32,12 +33,12 @@ static uint8_t debug_stream_enable = 0U;
 
 static void Ctrl_SendBytes(UART_HandleTypeDef *huart, uint8_t *buf, uint8_t len)
 {
-  if (huart->Instance == USART3)
+  if (huart == stream_uart)
   {
     debug_tx_busy = 1U;
   }
   HAL_UART_Transmit(huart, buf, len, 30);
-  if (huart->Instance == USART3)
+  if (huart == stream_uart)
   {
     debug_tx_pause_until_ms = HAL_GetTick() + 50U;
     debug_tx_busy = 0U;
@@ -372,14 +373,15 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
-    if ((Step42BoardMode_Get() == STEP42_BOARD_UART) &&
-        (response_uart->Instance == USART2))
+    if (payload[0] != 0U)
     {
-      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_DENIED);
-      return;
+      stream_uart = response_uart;
+      debug_stream_enable = 1U;
     }
-
-    debug_stream_enable = (payload[0] != 0U) ? 1U : 0U;
+    else
+    {
+      debug_stream_enable = 0U;
+    }
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -779,6 +781,7 @@ void Step42Comms_Init(void)
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
   debug_stream_enable = 0U;
+  stream_uart = &huart3;
   error_rx_head = error_rx_tail = 0U;
   debug_rx_head = debug_rx_tail = 0U;
   Ctrl_StartActiveReceiver();
@@ -789,6 +792,7 @@ void Step42Comms_OnBoardModeChanged(void)
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
   debug_stream_enable = 0U;
+  stream_uart = &huart3;
   debug_tx_pause_until_ms = 0U;
   error_rx_head = error_rx_tail = 0U;
   debug_rx_head = debug_rx_tail = 0U;
@@ -840,7 +844,7 @@ void Step42Comms_SendStreamQueryIfDue(void)
       ((int32_t)(now - debug_tx_pause_until_ms) >= 0))
   {
     debug_raw_last_tx_ms = now;
-    response_uart = &huart3;
+    response_uart = stream_uart;
     Step42Comms_SendTelemetry();
   }
 }
