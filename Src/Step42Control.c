@@ -238,6 +238,25 @@ static void Stepper_ForceStopPosition(Stepper_t *stepper)
   __HAL_TIM_SET_COMPARE(stepper->htim, stepper->tim_channel, 0);
 }
 
+static void Encoder_RebaseUnwrapped(void)
+{
+  uint32_t primask = __get_PRIMASK();
+
+  __disable_irq();
+  if (mt6701_unwrap_valid != 0U)
+  {
+    mt6701_unwrapped_deg = mt6701_angle_deg;
+    mt6701_last_raw = mt6701_raw_angle;
+  }
+  speed_feedback_valid = 0U;
+  speed_accum_delta_deg = 0.0f;
+  speed_accum_time_s = 0.0f;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+}
+
 static void Motor_EnableOutput(void)
 {
   if (thermal_lockout == 0U)
@@ -695,6 +714,7 @@ void Step42Control_StopMotion(void)
   Step42Tracking_Stop();
   closed_speed_target_steps = 0.0f;
   Stepper_ForceStopPosition(&Motor_42);
+  Encoder_RebaseUnwrapped();
   led_white_off;
 }
 
