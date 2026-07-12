@@ -958,6 +958,28 @@ class AngleViewer(tk.Tk):
 
     def _process_frame(self, cmd, seq, payload):
         completed_pending = self._complete_pending(cmd, seq, payload)
+        if cmd == CMD_STREAM and seq == 0 and len(payload) >= 10:
+            status = payload[0]
+            current_cdeg, target_cdeg, error_cdeg = struct.unpack("<HHh", payload[1:7])
+            pid_active = payload[7]
+            rpm_x10 = struct.unpack("<h", payload[8:10])[0]
+            now = time.monotonic()
+            self.current_angle_deg = current_cdeg / 100.0
+            self.target_angle_deg = target_cdeg / 100.0
+            self.deg_var.set(f"{self.current_angle_deg:7.3f}°")
+            if (now - self.last_rpm_display_time) >= RPM_DISPLAY_INTERVAL:
+                self.rpm_var.set(f"{rpm_x10 / 10.0:7.2f}")
+                self.last_rpm_display_time = now
+            self.stream_status_var.set("数据流：开启")
+            self.angle_status_var.set(
+                f"角度：驱动目标 {self.target_angle_deg:.2f}°，"
+                f"当前 {self.current_angle_deg:.2f}°，误差 {error_cdeg / 100.0:+.2f}°，"
+                f"PID {'运行' if pid_active else '停止'}"
+            )
+            self._append_wave_sample(now)
+            if status != 0:
+                self.status_var.set(f"数据流状态错误：{status}")
+            return
         if cmd == CMD_QUERY and len(payload) >= 10:
             status, enabled, stream, mode, raw, angle_cdeg, pid_output = struct.unpack("<BBBBHHh", payload[:10])
             pid_params = None

@@ -634,3 +634,28 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     }
     return 0;
 }
+
+int Step42_DecodeStreamTelemetry(const Step42_Response *response,
+                                 Step42_Telemetry *telemetry)
+{
+    if ((response == 0) ||
+        (telemetry == 0) ||
+        (response->cmd != STEP42_CMD_STREAM) ||
+        (response->seq != 0U) ||
+        (response->len < 10U))
+    {
+        return -1;
+    }
+
+    telemetry->status = response->payload[0];
+    telemetry->current_angle_deg =
+        ((float)Step42_ReadU16(response->payload, 1U)) / 100.0f;
+    telemetry->target_angle_deg =
+        ((float)Step42_ReadU16(response->payload, 3U)) / 100.0f;
+    telemetry->position_error_deg =
+        ((float)Step42_ReadI16(response->payload, 5U)) / 100.0f;
+    telemetry->position_pid_active = response->payload[7];
+    telemetry->speed_rpm =
+        ((float)Step42_ReadI16(response->payload, 8U)) / 10.0f;
+    return 0;
+}

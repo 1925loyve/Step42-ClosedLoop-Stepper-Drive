@@ -121,6 +121,16 @@ typedef struct
     uint8_t position_pid_active;
 } Step42_Status;
 
+typedef struct
+{
+    uint8_t status;
+    float current_angle_deg;
+    float target_angle_deg;
+    float position_error_deg;
+    uint8_t position_pid_active;
+    float speed_rpm;
+} Step42_Telemetry;
+
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);
 void Step42_ParserInit(Step42_Parser *parser);
 Step42_ParseResult Step42_ParseByte(Step42_Parser *parser,
@@ -185,6 +195,8 @@ uint16_t Step42_BuildSetChopperMode(uint8_t *buf, uint16_t max_len,
 
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status);
 int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *status);
+int Step42_DecodeStreamTelemetry(const Step42_Response *response,
+                                 Step42_Telemetry *telemetry);
 
 #ifdef __cplusplus
 }

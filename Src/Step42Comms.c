@@ -6,7 +6,7 @@
 #include "Step42Tracking.h"
 #include "Tmc2209.h"
 
-#define STATUS_STREAM_INTERVAL_MS (100UL)
+#define STATUS_STREAM_INTERVAL_MS (50UL)
 #define CTRL_RX_BUFFER_SIZE (128U)
 #define CTRL_RX_BUFFER_MASK (CTRL_RX_BUFFER_SIZE - 1U)
 
@@ -163,6 +163,33 @@ void Step42Comms_SendQuery(uint8_t seq)
                        Ctrl_ClampI16(Step42Control_GetPositionErrorDeg() * 100.0f));
   resp[53] = Step42Control_IsPositionPidActive();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
+}
+
+static void Step42Comms_SendTelemetry(void)
+{
+  uint8_t resp[10];
+  uint16_t angle_cdeg = (uint16_t)(Step42Control_GetAngleDeg() * 100.0f + 0.5f);
+  uint16_t target_cdeg =
+      (uint16_t)(Step42Control_GetPositionTargetDeg() * 100.0f + 0.5f);
+
+  if (angle_cdeg >= 36000U)
+  {
+    angle_cdeg = 0U;
+  }
+  if (target_cdeg >= 36000U)
+  {
+    target_cdeg = 0U;
+  }
+
+  resp[0] = CTRL_STATUS_OK;
+  Step42Slave_WriteU16(resp, 1U, angle_cdeg);
+  Step42Slave_WriteU16(resp, 3U, target_cdeg);
+  Step42Slave_WriteI16(resp, 5U,
+                       Ctrl_ClampI16(Step42Control_GetPositionErrorDeg() * 100.0f));
+  resp[7] = Step42Control_IsPositionPidActive();
+  Step42Slave_WriteI16(resp, 8U,
+                       Ctrl_ClampI16(Step42Control_GetSpeedRpm() * 10.0f));
+  Ctrl_SendFrame(CTRL_CMD_STREAM, 0U, resp, sizeof(resp));
 }
 
 static void Step42Comms_SendTrackingQuery(uint8_t seq)
@@ -788,7 +815,7 @@ void Step42Comms_SendStreamQueryIfDue(void)
       ((int32_t)(now - debug_tx_pause_until_ms) >= 0))
   {
     debug_raw_last_tx_ms = now;
-    Step42Comms_SendQuery(0U);
+    Step42Comms_SendTelemetry();
   }
 }
 
