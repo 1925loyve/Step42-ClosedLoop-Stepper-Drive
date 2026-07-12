@@ -1030,12 +1030,9 @@ class AngleViewer(tk.Tk):
         self.enable_status_var.set("电机：已使能" if enabled else "电机：已失能")
         self.stream_status_var.set("数据流：开启" if stream else "数据流：关闭")
         self.current_mode = mode
-        if mode in MODE_NAMES:
-            self.mode_var.set(MODE_NAMES[mode])
         self.mode_status_var.set(f"模式：{MODE_NAMES.get(mode, '未知')}")
         if microsteps is not None:
             self.current_microsteps = microsteps
-            self.microstep_var.set(str(microsteps))
             self.microstep_status_var.set(f"细分：当前 {microsteps}")
         if closed_accel is not None:
             self.closed_accel_status_var.set(f"闭环加速度：当前 {closed_accel}")
@@ -1062,7 +1059,6 @@ class AngleViewer(tk.Tk):
             )
             if chopper_mode is not None:
                 chopper_name = CHOPPER_MODE_NAMES.get(chopper_mode, f"未知{chopper_mode}")
-                self.chopper_mode_var.set(chopper_name)
                 self.chopper_status_var.set(f"斩波模式：当前 {chopper_name}")
             else:
                 chopper_name = "旧固件未知"

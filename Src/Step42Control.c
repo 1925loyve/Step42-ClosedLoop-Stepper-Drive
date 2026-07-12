@@ -19,6 +19,7 @@
 #define CONTROL_TIMER_TICK_HZ (1000000UL)
 #define SPEED_ESTIMATE_WINDOW_S (0.020f)
 #define SPEED_FILTER_ALPHA (0.25f)
+#define WEAK_PID_MIN_CORRECTION_SPEED (80.0f)
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim6;
@@ -269,6 +270,14 @@ static void WeakPID_Update(float current_angle)
   }
 
   output = WEAK_PID_OUTPUT_SIGN * PID_UpdateLinear(&weak_pid, weak_pid_target_deg, current_angle);
+  if ((output > 0.0f) && (output < WEAK_PID_MIN_CORRECTION_SPEED))
+  {
+    output = WEAK_PID_MIN_CORRECTION_SPEED;
+  }
+  else if ((output < 0.0f) && (output > -WEAK_PID_MIN_CORRECTION_SPEED))
+  {
+    output = -WEAK_PID_MIN_CORRECTION_SPEED;
+  }
   weak_pid_output_steps = output;
 
   if (AbsF(output) < 1.0f)
@@ -731,6 +740,13 @@ uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
   motor_microsteps = microsteps;
   motor_steps_per_rev = MOTOR_BASE_STEPS_PER_REV * (float)motor_microsteps;
   ApplyDefaultParams(microsteps);
+  if ((control_mode == CTRL_MODE_CLOSED_POSITION) &&
+      (motor_user_enabled != 0U))
+  {
+    weak_pid_target_deg = mt6701_unwrapped_deg;
+    PID_Reset(&weak_pid);
+    weak_pid_enable = 1U;
+  }
   return 1U;
 }
 
