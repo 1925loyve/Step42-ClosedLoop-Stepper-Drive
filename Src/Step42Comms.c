@@ -6,7 +6,7 @@
 #include "Step42Tracking.h"
 #include "Tmc2209.h"
 
-#define DEBUG_RAW_TX_INTERVAL_MS (20UL)
+#define STATUS_STREAM_INTERVAL_MS (100UL)
 #define CTRL_RX_BUFFER_SIZE (128U)
 #define CTRL_RX_BUFFER_MASK (CTRL_RX_BUFFER_SIZE - 1U)
 
@@ -784,7 +784,7 @@ void Step42Comms_SendStreamQueryIfDue(void)
 
   if ((debug_stream_enable != 0U) &&
       (debug_tx_busy == 0U) &&
-      ((uint32_t)(now - debug_raw_last_tx_ms) >= DEBUG_RAW_TX_INTERVAL_MS) &&
+      ((uint32_t)(now - debug_raw_last_tx_ms) >= STATUS_STREAM_INTERVAL_MS) &&
       ((int32_t)(now - debug_tx_pause_until_ms) >= 0))
   {
     debug_raw_last_tx_ms = now;
