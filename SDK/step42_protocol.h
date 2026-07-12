@@ -129,6 +129,8 @@ typedef struct
     float position_error_deg;
     uint8_t position_pid_active;
     float speed_rpm;
+    uint16_t raw_angle;
+    float absolute_angle_deg;
 } Step42_Telemetry;
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);

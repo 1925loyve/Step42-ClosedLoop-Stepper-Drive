@@ -173,7 +173,7 @@ void Step42Comms_SendQuery(uint8_t seq)
 
 static void Step42Comms_SendTelemetry(void)
 {
-  uint8_t resp[10];
+  uint8_t resp[12];
   uint16_t angle_cdeg = (uint16_t)(Step42Control_GetAngleDeg() * 100.0f + 0.5f);
   uint16_t target_cdeg =
       (uint16_t)(Step42Control_GetPositionTargetDeg() * 100.0f + 0.5f);
@@ -195,6 +195,7 @@ static void Step42Comms_SendTelemetry(void)
   resp[7] = Step42Control_IsPositionPidActive();
   Step42Slave_WriteI16(resp, 8U,
                        Ctrl_ClampI16(Step42Control_GetSpeedRpm() * 10.0f));
+  Step42Slave_WriteU16(resp, 10U, Step42Control_GetRawAngle());
   Ctrl_SendFrame(CTRL_CMD_STREAM, 0U, resp, sizeof(resp));
 }
 
@@ -369,6 +370,12 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     if (len != 1U)
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if ((Step42BoardMode_Get() == STEP42_BOARD_UART) &&
+        (response_uart->Instance == USART2))
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_DENIED);
       return;
     }
 

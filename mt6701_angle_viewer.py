@@ -967,6 +967,11 @@ class AngleViewer(tk.Tk):
             self.current_angle_deg = current_cdeg / 100.0
             self.target_angle_deg = target_cdeg / 100.0
             self.deg_var.set(f"{self.current_angle_deg:7.3f}°")
+            if len(payload) >= 12:
+                raw = struct.unpack("<H", payload[10:12])[0]
+                absolute_deg = (float(raw & 0x3FFF) * 360.0) / RAW_MAX
+                self.raw_var.set(f"{raw:5d}")
+                self.abs_deg_var.set(f"{absolute_deg:7.3f}°")
             if (now - self.last_rpm_display_time) >= RPM_DISPLAY_INTERVAL:
                 self.rpm_var.set(f"{rpm_x10 / 10.0:7.2f}")
                 self.last_rpm_display_time = now

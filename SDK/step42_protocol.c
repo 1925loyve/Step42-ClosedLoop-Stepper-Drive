@@ -657,5 +657,13 @@ int Step42_DecodeStreamTelemetry(const Step42_Response *response,
     telemetry->position_pid_active = response->payload[7];
     telemetry->speed_rpm =
         ((float)Step42_ReadI16(response->payload, 8U)) / 10.0f;
+    telemetry->raw_angle = 0U;
+    telemetry->absolute_angle_deg = 0.0f;
+    if (response->len >= 12U)
+    {
+        telemetry->raw_angle = Step42_ReadU16(response->payload, 10U);
+        telemetry->absolute_angle_deg =
+            ((float)(telemetry->raw_angle & 0x3FFFU)) * 360.0f / 16384.0f;
+    }
     return 0;
 }
