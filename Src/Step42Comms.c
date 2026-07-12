@@ -7,7 +7,7 @@
 #include "Tmc2209.h"
 
 #define STATUS_STREAM_INTERVAL_MS (50UL)
-#define CTRL_RX_BUFFER_SIZE (128U)
+#define CTRL_RX_BUFFER_SIZE (256U)
 #define CTRL_RX_BUFFER_MASK (CTRL_RX_BUFFER_SIZE - 1U)
 
 extern UART_HandleTypeDef huart2;
@@ -15,7 +15,7 @@ extern UART_HandleTypeDef huart3;
 
 static Step42Slave_Parser_t error_parser;
 static Step42Slave_Parser_t debug_parser;
-static UART_HandleTypeDef *active_uart = &huart2;
+static UART_HandleTypeDef *response_uart = &huart2;
 static uint8_t error_rx_buffer[CTRL_RX_BUFFER_SIZE];
 static uint8_t debug_rx_buffer[CTRL_RX_BUFFER_SIZE];
 static volatile uint16_t error_rx_head = 0U;
@@ -30,12 +30,18 @@ static volatile uint32_t debug_raw_last_tx_ms = 0U;
 static volatile uint32_t debug_rx_count = 0U;
 static uint8_t debug_stream_enable = 0U;
 
-static void Debug_SendBytes(uint8_t *buf, uint8_t len)
+static void Ctrl_SendBytes(UART_HandleTypeDef *huart, uint8_t *buf, uint8_t len)
 {
-  debug_tx_busy = 1U;
-  HAL_UART_Transmit(active_uart, buf, len, 30);
-  debug_tx_pause_until_ms = HAL_GetTick() + 50U;
-  debug_tx_busy = 0U;
+  if (huart->Instance == USART3)
+  {
+    debug_tx_busy = 1U;
+  }
+  HAL_UART_Transmit(huart, buf, len, 30);
+  if (huart->Instance == USART3)
+  {
+    debug_tx_pause_until_ms = HAL_GetTick() + 50U;
+    debug_tx_busy = 0U;
+  }
 }
 
 static void Ctrl_SendFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint8_t len)
@@ -46,7 +52,7 @@ static void Ctrl_SendFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uin
   frame_len = Step42Slave_BuildResponse(frame, sizeof(frame), cmd, seq, payload, len);
   if (frame_len > 0U)
   {
-    Debug_SendBytes(frame, frame_len);
+    Ctrl_SendBytes(response_uart, frame, frame_len);
   }
 }
 
@@ -680,6 +686,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   {
   case CTRL_CMD_PING:
   case CTRL_CMD_ENABLE:
+  case CTRL_CMD_PID:
   case CTRL_CMD_STREAM:
   case CTRL_CMD_QUERY:
   case CTRL_CMD_MODE:
@@ -731,8 +738,10 @@ static void Ctrl_ProcessBuffer(uint8_t *buffer,
                                volatile uint16_t *head,
                                volatile uint16_t *tail,
                                Step42Slave_Parser_t *parser,
+                               UART_HandleTypeDef *huart,
                                uint8_t restricted)
 {
+  response_uart = huart;
   while (*tail != *head)
   {
     uint8_t value = buffer[*tail];
@@ -749,12 +758,11 @@ static void Ctrl_StartActiveReceiver(void)
 
   if (Step42BoardMode_Get() == STEP42_BOARD_UART)
   {
-    active_uart = &huart2;
     HAL_UART_Receive_IT(&huart2, &error_rx_byte, 1U);
+    HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
   }
   else if (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG)
   {
-    active_uart = &huart3;
     HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
   }
 }
@@ -793,7 +801,14 @@ void Step42Comms_ProcessRx(void)
                        &error_rx_head,
                        &error_rx_tail,
                        &error_parser,
+                       &huart2,
                        0U);
+    Ctrl_ProcessBuffer(debug_rx_buffer,
+                       &debug_rx_head,
+                       &debug_rx_tail,
+                       &debug_parser,
+                       &huart3,
+                       1U);
   }
   else if (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG)
   {
@@ -801,7 +816,8 @@ void Step42Comms_ProcessRx(void)
                        &debug_rx_head,
                        &debug_rx_tail,
                        &debug_parser,
-                       1U);
+                       &huart3,
+                       0U);
   }
 }
 
@@ -810,11 +826,14 @@ void Step42Comms_SendStreamQueryIfDue(void)
   uint32_t now = HAL_GetTick();
 
   if ((debug_stream_enable != 0U) &&
+      ((Step42BoardMode_Get() == STEP42_BOARD_UART) ||
+       (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG)) &&
       (debug_tx_busy == 0U) &&
       ((uint32_t)(now - debug_raw_last_tx_ms) >= STATUS_STREAM_INTERVAL_MS) &&
       ((int32_t)(now - debug_tx_pause_until_ms) >= 0))
   {
     debug_raw_last_tx_ms = now;
+    response_uart = &huart3;
     Step42Comms_SendTelemetry();
   }
 }
@@ -825,13 +844,20 @@ void Step42Comms_OnUartError(UART_HandleTypeDef *huart)
   {
     Step42Slave_ParserInit(&error_parser);
     error_rx_head = error_rx_tail = 0U;
-    HAL_UART_Receive_IT(&huart2, &error_rx_byte, 1U);
+    if (Step42BoardMode_Get() == STEP42_BOARD_UART)
+    {
+      HAL_UART_Receive_IT(&huart2, &error_rx_byte, 1U);
+    }
   }
   else if (huart->Instance == USART3)
   {
     Step42Slave_ParserInit(&debug_parser);
     debug_rx_head = debug_rx_tail = 0U;
-    HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
+    if ((Step42BoardMode_Get() == STEP42_BOARD_UART) ||
+        (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG))
+    {
+      HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
+    }
   }
 }
 
@@ -840,11 +866,18 @@ void Step42Comms_OnUartRxComplete(UART_HandleTypeDef *huart)
   if (huart->Instance == USART2)
   {
     Ctrl_RxPush(error_rx_buffer, &error_rx_head, &error_rx_tail, error_rx_byte);
-    HAL_UART_Receive_IT(&huart2, &error_rx_byte, 1U);
+    if (Step42BoardMode_Get() == STEP42_BOARD_UART)
+    {
+      HAL_UART_Receive_IT(&huart2, &error_rx_byte, 1U);
+    }
   }
   else if (huart->Instance == USART3)
   {
     Ctrl_RxPush(debug_rx_buffer, &debug_rx_head, &debug_rx_tail, debug_rx_byte);
-    HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
+    if ((Step42BoardMode_Get() == STEP42_BOARD_UART) ||
+        (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG))
+    {
+      HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
+    }
   }
 }
