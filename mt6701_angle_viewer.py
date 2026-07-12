@@ -256,6 +256,8 @@ class AngleViewer(tk.Tk):
 
         self.frame_queue = queue.Queue()
         self.status_queue = queue.Queue()
+        self.tx_queue = deque()
+        self.pending_tx = None
         self.reader = SerialReader(self.frame_queue.put, self.status_queue.put)
         self.seq = 0
         self.connected_port = None
@@ -353,9 +355,44 @@ class AngleViewer(tk.Tk):
             self.seq = 1
         return self.seq
 
-    def _send(self, cmd, payload=b""):
-        frame = build_frame(cmd, self._next_seq(), payload)
-        return self.reader.write_frame(frame)
+    def _send(self, cmd, payload=b"", context=None):
+        seq = self._next_seq()
+        frame = build_frame(cmd, seq, payload)
+        item = {"cmd": cmd, "seq": seq, "frame": frame,
+                "context": context, "sent_at": None}
+        if self.pending_tx is None:
+            if not self.reader.write_frame(frame):
+                return False
+            item["sent_at"] = time.monotonic()
+            self.pending_tx = item
+        else:
+            self.tx_queue.append(item)
+        return True
+
+    def _send_next_queued(self):
+        if self.pending_tx is not None or not self.tx_queue:
+            return
+        item = self.tx_queue.popleft()
+        if self.reader.write_frame(item["frame"]):
+            item["sent_at"] = time.monotonic()
+            self.pending_tx = item
+
+    def _complete_pending(self, cmd, seq, payload):
+        item = self.pending_tx
+        if item is None or item["cmd"] != cmd or item["seq"] != seq:
+            return False
+        self.pending_tx = None
+        status = payload[0] if payload else None
+        context = item.get("context") or {}
+        if cmd == CMD_ANGLE:
+            if status == 0 and "target_angle" in context:
+                self.target_angle_deg = context["target_angle"]
+                self._append_wave_sample(time.monotonic())
+                self.angle_status_var.set(f"角度：设备已确认 {self.target_angle_deg:.3f}°")
+            elif status is not None:
+                self.angle_status_var.set(f"角度：设备拒绝，{STATUS_NAMES.get(status, status)}")
+        self.after_idle(self._send_next_queued)
+        return True
 
     def _build_ui(self):
         root = ttk.Frame(self, padding=14)
@@ -565,12 +602,16 @@ class AngleViewer(tk.Tk):
             self.status_var.set("波特率不是有效数字")
             return
         self.connected_port = port
+        self.tx_queue.clear()
+        self.pending_tx = None
         self._reset_motion_state()
         self.status_var.set(f"正在连接 {port} ...")
         self.reader.start(port, baud)
 
     def disconnect(self):
         self.connected_port = None
+        self.tx_queue.clear()
+        self.pending_tx = None
         self._reset_motion_state()
         self.reader.stop()
         self.status_var.set("已请求断开")
@@ -769,10 +810,8 @@ class AngleViewer(tk.Tk):
             self.angle_status_var.set("角度：范围必须是 0~360")
             return
         payload = struct.pack("<H", int(round(angle * 100)))
-        if self._send(CMD_ANGLE, payload):
-            self.target_angle_deg = angle
-            self._append_wave_sample(time.monotonic())
-            self.angle_status_var.set(f"角度：已发送 {angle:.3f}°")
+        if self._send(CMD_ANGLE, payload, {"target_angle": angle}):
+            self.angle_status_var.set(f"角度：等待设备确认 {angle:.3f}°")
 
     def send_track_basic(self):
         try:
@@ -902,10 +941,23 @@ class AngleViewer(tk.Tk):
                 self.after(160, self.send_track_query)
             if kind in ("closed", "error"):
                 self.connected_port = None
+                self.tx_queue.clear()
+                self.pending_tx = None
+
+        if self.pending_tx is not None:
+            sent_at = self.pending_tx.get("sent_at")
+            if sent_at is not None and (time.monotonic() - sent_at) > 1.0:
+                timed_out = self.pending_tx
+                self.pending_tx = None
+                self.status_var.set(
+                    f"命令0x{timed_out['cmd']:02X}等待响应超时，后续命令已暂停"
+                )
+                self.tx_queue.clear()
 
         self.after(30, self._poll_queues)
 
     def _process_frame(self, cmd, seq, payload):
+        completed_pending = self._complete_pending(cmd, seq, payload)
         if cmd == CMD_QUERY and len(payload) >= 10:
             status, enabled, stream, mode, raw, angle_cdeg, pid_output = struct.unpack("<BBBBHHh", payload[:10])
             pid_params = None
@@ -934,10 +986,16 @@ class AngleViewer(tk.Tk):
                 track_mode, track_freq, track_speed, track_accel = struct.unpack("<BBBB", payload[38:42])
                 primary_x100, secondary_x100, track_output = struct.unpack("<hhh", payload[42:48])
                 chopper_mode = payload[48] if len(payload) >= 49 else None
+                position_state = None
+                if len(payload) >= 54:
+                    target_cdeg = struct.unpack("<H", payload[49:51])[0]
+                    error_cdeg = struct.unpack("<h", payload[51:53])[0]
+                    position_state = (target_cdeg / 100.0, error_cdeg / 100.0,
+                                      payload[53])
                 extended = (board_mode, sensor_flags, temp_cdeg / 100.0, rpm_x10 / 10.0,
                             track_mode, track_freq, track_speed, track_accel,
                             primary_x100 / 100.0, secondary_x100 / 100.0,
-                            track_output, chopper_mode)
+                            track_output, chopper_mode, position_state)
             self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0,
                                  pid_output, pid_params, microsteps, closed_accel,
                                  zero_valid, home_mode, extended)
@@ -986,7 +1044,7 @@ class AngleViewer(tk.Tk):
                 self.pid_status_var.set(f"PID：{text}")
             elif cmd == CMD_SPEED:
                 self.speed_status_var.set(f"速度：{text}")
-            elif cmd == CMD_ANGLE:
+            elif cmd == CMD_ANGLE and not completed_pending:
                 self.angle_status_var.set(f"角度：{text}")
             elif cmd == CMD_STOP:
                 self.speed_status_var.set(f"停止：{text}")
@@ -1007,7 +1065,8 @@ class AngleViewer(tk.Tk):
                 self.track_status_var.set(f"误差PID：{text}")
             elif cmd == CMD_CHOPPER_MODE:
                 self.chopper_status_var.set(f"斩波模式：{text}")
-        self._send(CMD_QUERY)
+        if self.pending_tx is None and not self.tx_queue:
+            self._send(CMD_QUERY)
 
     def _display_status(self, status, enabled, stream, mode, raw, deg, pid_output,
                         pid_params=None, microsteps=None, closed_accel=None,
@@ -1045,7 +1104,7 @@ class AngleViewer(tk.Tk):
                 f"PID：当前 Kp={kp:.2f}, Ki={ki:.2f}, Kd={kd:.2f}, Limit={limit}, Deadband={deadband:.3f}"
             )
         if extended is not None:
-            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode = extended
+            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state = extended
             self.board_mode_var.set(BOARD_MODE_NAMES.get(board_mode, f"未知{board_mode}"))
             if sensor_flags & 0x01:
                 suffix = " 关断" if sensor_flags & 0x04 else (" 警告" if sensor_flags & 0x02 else "")
@@ -1065,6 +1124,13 @@ class AngleViewer(tk.Tk):
             self.driver_status_var.set(
                 f"实际驱动状态：{MODE_NAMES.get(mode, '未知')} | {self.current_microsteps}细分 | {chopper_name}"
             )
+            if position_state is not None and mode == MODE_CLOSED_POSITION:
+                actual_target, position_error, pid_active = position_state
+                self.target_angle_deg = actual_target
+                self.angle_status_var.set(
+                    f"角度：驱动目标 {actual_target:.2f}°，误差 {position_error:+.2f}°，"
+                    f"PID {'运行' if pid_active else '停止'}"
+                )
         if status != 0:
             self.status_var.set(f"设备状态错误：{status}")
 

@@ -116,6 +116,9 @@ typedef struct
     float tracking_secondary_feedback;
     int16_t tracking_output;
     uint8_t chopper_mode;
+    float position_target_deg;
+    float position_error_deg;
+    uint8_t position_pid_active;
 } Step42_Status;
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);

@@ -7,6 +7,8 @@
 #include "Tmc2209.h"
 
 #define DEBUG_RAW_TX_INTERVAL_MS (20UL)
+#define CTRL_RX_BUFFER_SIZE (128U)
+#define CTRL_RX_BUFFER_MASK (CTRL_RX_BUFFER_SIZE - 1U)
 
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart3;
@@ -14,6 +16,14 @@ extern UART_HandleTypeDef huart3;
 static Step42Slave_Parser_t error_parser;
 static Step42Slave_Parser_t debug_parser;
 static UART_HandleTypeDef *active_uart = &huart2;
+static uint8_t error_rx_buffer[CTRL_RX_BUFFER_SIZE];
+static uint8_t debug_rx_buffer[CTRL_RX_BUFFER_SIZE];
+static volatile uint16_t error_rx_head = 0U;
+static volatile uint16_t error_rx_tail = 0U;
+static volatile uint16_t debug_rx_head = 0U;
+static volatile uint16_t debug_rx_tail = 0U;
+static uint8_t error_rx_byte = 0U;
+static uint8_t debug_rx_byte = 0U;
 static volatile uint8_t debug_tx_busy = 0U;
 static volatile uint32_t debug_tx_pause_until_ms = 0U;
 static volatile uint32_t debug_raw_last_tx_ms = 0U;
@@ -81,8 +91,9 @@ static int16_t Ctrl_ClampI16(float value)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[49];
+  uint8_t resp[54];
   uint16_t angle_cdeg;
+  uint16_t target_cdeg;
   int16_t pid_output;
   float kp;
   float ki;
@@ -142,6 +153,15 @@ void Step42Comms_SendQuery(uint8_t seq)
   Step42Slave_WriteI16(resp, 44U, Ctrl_ClampI16(Step42Tracking_GetSecondaryFeedback() * 100.0f));
   Step42Slave_WriteI16(resp, 46U, Ctrl_ClampI16(Step42Tracking_GetOutput()));
   resp[48] = Tmc2209_GetChopperMode();
+  target_cdeg = (uint16_t)(Step42Control_GetPositionTargetDeg() * 100.0f + 0.5f);
+  if (target_cdeg >= 36000U)
+  {
+    target_cdeg = 0U;
+  }
+  Step42Slave_WriteU16(resp, 49U, target_cdeg);
+  Step42Slave_WriteI16(resp, 51U,
+                       Ctrl_ClampI16(Step42Control_GetPositionErrorDeg() * 100.0f));
+  resp[53] = Step42Control_IsPositionPidActive();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -665,22 +685,50 @@ static void Ctrl_ProcessRxByte(Step42Slave_Parser_t *parser, uint8_t ch, uint8_t
   }
 }
 
-static void Ctrl_ProcessUart(UART_HandleTypeDef *huart,
-                             Step42Slave_Parser_t *parser,
-                             uint8_t restricted)
+static void Ctrl_RxPush(uint8_t *buffer,
+                        volatile uint16_t *head,
+                        volatile uint16_t *tail,
+                        uint8_t value)
 {
-  active_uart = huart;
-  while ((huart->Instance->ISR & USART_ISR_RXNE_RXFNE) != 0U)
-  {
-    debug_rx_count++;
-    Ctrl_ProcessRxByte(parser,
-                       (uint8_t)(huart->Instance->RDR & 0xFFU),
-                       restricted);
-  }
+  uint16_t next = (uint16_t)((*head + 1U) & CTRL_RX_BUFFER_MASK);
 
-  if ((huart->Instance->ISR & USART_ISR_ORE) != 0U)
+  if (next == *tail)
   {
-    __HAL_UART_CLEAR_OREFLAG(huart);
+    *tail = (uint16_t)((*tail + 1U) & CTRL_RX_BUFFER_MASK);
+  }
+  buffer[*head] = value;
+  *head = next;
+}
+
+static void Ctrl_ProcessBuffer(uint8_t *buffer,
+                               volatile uint16_t *head,
+                               volatile uint16_t *tail,
+                               Step42Slave_Parser_t *parser,
+                               uint8_t restricted)
+{
+  while (*tail != *head)
+  {
+    uint8_t value = buffer[*tail];
+    *tail = (uint16_t)((*tail + 1U) & CTRL_RX_BUFFER_MASK);
+    debug_rx_count++;
+    Ctrl_ProcessRxByte(parser, value, restricted);
+  }
+}
+
+static void Ctrl_StartActiveReceiver(void)
+{
+  HAL_UART_AbortReceive(&huart2);
+  HAL_UART_AbortReceive(&huart3);
+
+  if (Step42BoardMode_Get() == STEP42_BOARD_UART)
+  {
+    active_uart = &huart2;
+    HAL_UART_Receive_IT(&huart2, &error_rx_byte, 1U);
+  }
+  else if (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG)
+  {
+    active_uart = &huart3;
+    HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
   }
 }
 
@@ -689,7 +737,9 @@ void Step42Comms_Init(void)
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
   debug_stream_enable = 0U;
-  active_uart = (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG) ? &huart3 : &huart2;
+  error_rx_head = error_rx_tail = 0U;
+  debug_rx_head = debug_rx_tail = 0U;
+  Ctrl_StartActiveReceiver();
 }
 
 void Step42Comms_OnBoardModeChanged(void)
@@ -698,23 +748,33 @@ void Step42Comms_OnBoardModeChanged(void)
   Step42Slave_ParserInit(&debug_parser);
   debug_stream_enable = 0U;
   debug_tx_pause_until_ms = 0U;
-  active_uart = (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG) ? &huart3 : &huart2;
+  error_rx_head = error_rx_tail = 0U;
+  debug_rx_head = debug_rx_tail = 0U;
 
   __HAL_UART_CLEAR_OREFLAG(&huart2);
   __HAL_UART_FLUSH_DRREGISTER(&huart2);
   __HAL_UART_CLEAR_OREFLAG(&huart3);
   __HAL_UART_FLUSH_DRREGISTER(&huart3);
+  Ctrl_StartActiveReceiver();
 }
 
 void Step42Comms_ProcessRx(void)
 {
   if (Step42BoardMode_Get() == STEP42_BOARD_UART)
   {
-    Ctrl_ProcessUart(&huart2, &error_parser, 0U);
+    Ctrl_ProcessBuffer(error_rx_buffer,
+                       &error_rx_head,
+                       &error_rx_tail,
+                       &error_parser,
+                       0U);
   }
   else if (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG)
   {
-    Ctrl_ProcessUart(&huart3, &debug_parser, 1U);
+    Ctrl_ProcessBuffer(debug_rx_buffer,
+                       &debug_rx_head,
+                       &debug_rx_tail,
+                       &debug_parser,
+                       1U);
   }
 }
 
@@ -737,9 +797,27 @@ void Step42Comms_OnUartError(UART_HandleTypeDef *huart)
   if (huart->Instance == USART2)
   {
     Step42Slave_ParserInit(&error_parser);
+    error_rx_head = error_rx_tail = 0U;
+    HAL_UART_Receive_IT(&huart2, &error_rx_byte, 1U);
   }
   else if (huart->Instance == USART3)
   {
     Step42Slave_ParserInit(&debug_parser);
+    debug_rx_head = debug_rx_tail = 0U;
+    HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
+  }
+}
+
+void Step42Comms_OnUartRxComplete(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART2)
+  {
+    Ctrl_RxPush(error_rx_buffer, &error_rx_head, &error_rx_tail, error_rx_byte);
+    HAL_UART_Receive_IT(&huart2, &error_rx_byte, 1U);
+  }
+  else if (huart->Instance == USART3)
+  {
+    Ctrl_RxPush(debug_rx_buffer, &debug_rx_head, &debug_rx_tail, debug_rx_byte);
+    HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
   }
 }

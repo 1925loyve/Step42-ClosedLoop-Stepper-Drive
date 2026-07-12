@@ -983,6 +983,25 @@ float Step42Control_GetPidOutputSteps(void)
   return weak_pid_output_steps;
 }
 
+float Step42Control_GetPositionTargetDeg(void)
+{
+  return Normalize360(weak_pid_target_deg);
+}
+
+float Step42Control_GetPositionErrorDeg(void)
+{
+  if ((control_mode != CTRL_MODE_CLOSED_POSITION) || (weak_pid_enable == 0U))
+  {
+    return 0.0f;
+  }
+  return weak_pid_target_deg - mt6701_unwrapped_deg;
+}
+
+uint8_t Step42Control_IsPositionPidActive(void)
+{
+  return ((control_mode == CTRL_MODE_CLOSED_POSITION) && (weak_pid_enable != 0U)) ? 1U : 0U;
+}
+
 float Step42Control_GetClosedAccel(void)
 {
   return closed_position_accel;

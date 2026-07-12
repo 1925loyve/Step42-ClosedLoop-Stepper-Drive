@@ -72,6 +72,11 @@ void Step42App_UARTErrorCallback(UART_HandleTypeDef *huart)
   Step42Comms_OnUartError(huart);
 }
 
+void Step42App_UARTRxCompleteCallback(UART_HandleTypeDef *huart)
+{
+  Step42Comms_OnUartRxComplete(huart);
+}
+
 void Step42App_TIMCaptureCallback(TIM_HandleTypeDef *htim)
 {
   Step42PwmInput_CaptureCallback(htim);

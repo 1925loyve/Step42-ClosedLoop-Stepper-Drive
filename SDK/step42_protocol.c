@@ -579,6 +579,9 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->angle_cdeg = Step42_ReadU16(response->payload, 6U);
     status->angle_deg = ((float)status->angle_cdeg) / 100.0f;
     status->pid_output = Step42_ReadI16(response->payload, 8U);
+    status->position_target_deg = 0.0f;
+    status->position_error_deg = 0.0f;
+    status->position_pid_active = 0U;
     if (response->len >= 32U)
     {
         status->kp = ((float)Step42_ReadI32(response->payload, 10U)) / 100.0f;
@@ -620,6 +623,14 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     if (response->len >= 49U)
     {
         status->chopper_mode = response->payload[48];
+    }
+    if (response->len >= 54U)
+    {
+        status->position_target_deg =
+            ((float)Step42_ReadU16(response->payload, 49U)) / 100.0f;
+        status->position_error_deg =
+            ((float)Step42_ReadI16(response->payload, 51U)) / 100.0f;
+        status->position_pid_active = response->payload[53];
     }
     return 0;
 }
