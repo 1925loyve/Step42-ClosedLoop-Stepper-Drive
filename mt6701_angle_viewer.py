@@ -598,7 +598,9 @@ class AngleViewer(tk.Tk):
         root.pack(fill=tk.BOTH, expand=True)
         for column, weight in enumerate((0, 3, 0, 0)):
             root.columnconfigure(column, weight=weight)
-        root.rowconfigure(1, weight=1)
+        # Keep the control area at its required height; the waveform receives
+        # only the remaining vertical space instead of being squeezed under it.
+        root.rowconfigure(1, weight=0)
         root.rowconfigure(2, weight=1)
 
         connection = ttk.LabelFrame(root, text="连接与通信", padding=8)
@@ -665,6 +667,28 @@ class AngleViewer(tk.Tk):
                                         self.stream_status_var), start=5):
             ttk.Label(mode, textvariable=variable).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=1)
 
+        position_pid = ttk.LabelFrame(left, text="闭环位置参数", padding=7)
+        position_pid.pack(fill=tk.X, pady=(8, 0))
+        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var),
+                           ("Limit", self.limit_var), ("Accel", self.closed_accel_var),
+                           ("Dead", self.deadband_var))
+        for index, (label, variable) in enumerate(position_fields):
+            row = index // 2
+            column = (index % 2) * 2
+            ttk.Label(position_pid, text=label).grid(
+                row=row, column=column, sticky=tk.W, padx=(0 if column == 0 else 8, 3), pady=2)
+            ttk.Entry(position_pid, textvariable=variable, width=8).grid(
+                row=row, column=column + 1, sticky=tk.W, pady=2)
+        pid_actions = ttk.Frame(position_pid)
+        pid_actions.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(5, 0))
+        ttk.Button(pid_actions, text="写 PID", command=self.send_pid_values).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(pid_actions, text="写加速度", command=self.send_closed_accel).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=3)
+        ttk.Button(pid_actions, text="默认值", command=self.fill_default_motion_params).pack(
+            side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=300).grid(
+            row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
         ttk.Combobox(zero, textvariable=self.home_mode_var, values=list(HOME_MODE_LABELS.keys()),
@@ -673,24 +697,6 @@ class AngleViewer(tk.Tk):
         ttk.Button(zero, text="当前位置设为零点", command=self.send_set_zero).pack(side=tk.LEFT, padx=6)
         ttk.Button(zero, text="执行回零", command=self.send_home).pack(side=tk.LEFT, padx=6)
         ttk.Label(zero, textvariable=self.home_status_var).pack(side=tk.LEFT, padx=8)
-
-        position_pid = ttk.LabelFrame(center, text="闭环位置参数", padding=8)
-        position_pid.pack(fill=tk.X, pady=(10, 0))
-        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var),
-                           ("Limit", self.limit_var), ("Accel", self.closed_accel_var),
-                           ("Deadband", self.deadband_var))
-        for index, (label, variable) in enumerate(position_fields):
-            row = index // 3
-            column = (index % 3) * 2
-            ttk.Label(position_pid, text=label).grid(row=row, column=column, sticky=tk.W, padx=(0 if column == 0 else 10, 4), pady=3)
-            ttk.Entry(position_pid, textvariable=variable, width=10).grid(row=row, column=column + 1, sticky=tk.W, pady=3)
-        pid_actions = ttk.Frame(position_pid)
-        pid_actions.grid(row=0, column=6, rowspan=2, sticky="nsew", padx=(12, 0))
-        ttk.Button(pid_actions, text="写入 PID", command=self.send_pid_values).pack(fill=tk.X)
-        ttk.Button(pid_actions, text="写入加速度", command=self.send_closed_accel).pack(fill=tk.X, pady=3)
-        ttk.Button(pid_actions, text="填入细分默认值", command=self.fill_default_motion_params).pack(fill=tk.X)
-        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=620).grid(
-            row=2, column=0, columnspan=7, sticky=tk.W, pady=(5, 0))
 
         speed = ttk.LabelFrame(center, text="测试电机：开环速度", padding=8)
         speed.pack(fill=tk.X, pady=(10, 0))
