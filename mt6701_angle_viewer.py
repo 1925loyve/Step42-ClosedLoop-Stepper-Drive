@@ -596,15 +596,20 @@ class AngleViewer(tk.Tk):
     def _build_ui(self):
         root = ttk.Frame(self, padding=10)
         root.pack(fill=tk.BOTH, expand=True)
-        for column, weight in enumerate((0, 3, 0, 0)):
-            root.columnconfigure(column, weight=weight)
+        root.columnconfigure(0, weight=0, minsize=190)
+        root.columnconfigure(1, weight=1)
+        root.columnconfigure(2, weight=0)
+        root.columnconfigure(3, weight=0)
         # Keep the control area at its required height; the waveform receives
         # only the remaining vertical space instead of being squeezed under it.
         root.rowconfigure(1, weight=0)
         root.rowconfigure(2, weight=1)
 
-        connection = ttk.LabelFrame(root, text="连接与通信", padding=8)
-        connection.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        top = ttk.Frame(root)
+        top.grid(row=0, column=0, columnspan=4, sticky="ew")
+        top.columnconfigure(1, weight=1)
+        connection = ttk.LabelFrame(top, text="连接与通信", padding=8)
+        connection.grid(row=0, column=0, sticky="w", padx=(0, 10))
         ttk.Label(connection, text="串口").grid(row=0, column=0, sticky=tk.W)
         self.port_combo = ttk.Combobox(connection, textvariable=self.port_var,
                                        width=12, state="readonly")
@@ -619,8 +624,8 @@ class AngleViewer(tk.Tk):
         ttk.Button(connection, text="断开", command=self.disconnect).grid(row=1, column=2, pady=(7, 0), sticky="ew")
         ttk.Button(connection, text="查询状态", command=self.send_query).grid(row=1, column=3, columnspan=2, padx=(4, 0), pady=(7, 0), sticky="ew")
 
-        telemetry = ttk.Frame(root)
-        telemetry.grid(row=0, column=1, columnspan=3, sticky="ew")
+        telemetry = ttk.Frame(top)
+        telemetry.grid(row=0, column=1, sticky="ew")
         metrics = (("绝对角度", self.abs_deg_var), ("零点角度", self.deg_var),
                    ("当前转速 RPM", self.rpm_var), ("温度", self.temp_var),
                    ("拨码通信模式", self.board_mode_var), ("连接接口", self.interface_role_var))
@@ -642,26 +647,26 @@ class AngleViewer(tk.Tk):
         mode = ttk.LabelFrame(left, text="模式状态", padding=8)
         mode.pack(fill=tk.X)
         mode.columnconfigure(1, weight=1)
-        rows = (("工作模式", self.mode_var, list(MODE_LABELS.keys()), self.send_mode),
+        rows = (("模式", self.mode_var, list(MODE_LABELS.keys()), self.send_mode),
                 ("细分", self.microstep_var, ["1", "2", "4", "8", "16", "32", "64", "128", "256"], self.send_microstep),
                 ("斩波", self.chopper_mode_var, list(CHOPPER_MODE_LABELS.keys()), self.send_chopper_mode))
         for row, (label, variable, values, command) in enumerate(rows):
             ttk.Label(mode, text=label).grid(row=row, column=0, sticky=tk.W, pady=3)
-            combo = ttk.Combobox(mode, textvariable=variable, values=values, state="readonly", width=10)
+            combo = ttk.Combobox(mode, textvariable=variable, values=values, state="readonly", width=6)
             combo.grid(row=row, column=1, sticky="ew", padx=3, pady=3)
             if variable is self.microstep_var:
                 self.microstep_combo = combo
                 combo.bind("<<ComboboxSelected>>", self._on_microstep_selected)
-            ttk.Button(mode, text="设置", command=command, width=5).grid(row=row, column=2, pady=3)
+            ttk.Button(mode, text="设", command=command, width=3).grid(row=row, column=2, pady=3)
         action_row = ttk.Frame(mode)
         action_row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(7, 4))
-        ttk.Button(action_row, text="使能电机", command=lambda: self.send_enable(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(action_row, text="失能电机", command=lambda: self.send_enable(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(action_row, text="使能", command=lambda: self.send_enable(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(action_row, text="失能", command=lambda: self.send_enable(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
         ttk.Button(action_row, text="停止", command=self.send_stop).pack(side=tk.LEFT, fill=tk.X, expand=True)
         stream_row = ttk.Frame(mode)
         stream_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 5))
-        ttk.Button(stream_row, text="数据流开启", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(stream_row, text="数据流关闭", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        ttk.Button(stream_row, text="流开", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(stream_row, text="流关", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
         for row, variable in enumerate((self.mode_status_var, self.microstep_status_var,
                                         self.chopper_status_var, self.enable_status_var,
                                         self.stream_status_var), start=5):
@@ -669,24 +674,24 @@ class AngleViewer(tk.Tk):
 
         position_pid = ttk.LabelFrame(left, text="闭环位置参数", padding=7)
         position_pid.pack(fill=tk.X, pady=(8, 0))
-        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var),
-                           ("Limit", self.limit_var), ("Accel", self.closed_accel_var),
+        position_fields = (("P", self.kp_var), ("I", self.ki_var), ("D", self.kd_var),
+                           ("Lim", self.limit_var), ("Acc", self.closed_accel_var),
                            ("Dead", self.deadband_var))
         for index, (label, variable) in enumerate(position_fields):
             row = index // 2
             column = (index % 2) * 2
             ttk.Label(position_pid, text=label).grid(
                 row=row, column=column, sticky=tk.W, padx=(0 if column == 0 else 8, 3), pady=2)
-            ttk.Entry(position_pid, textvariable=variable, width=8).grid(
+            ttk.Entry(position_pid, textvariable=variable, width=5).grid(
                 row=row, column=column + 1, sticky=tk.W, pady=2)
         pid_actions = ttk.Frame(position_pid)
         pid_actions.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(5, 0))
-        ttk.Button(pid_actions, text="写 PID", command=self.send_pid_values).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(pid_actions, text="写加速度", command=self.send_closed_accel).pack(
+        ttk.Button(pid_actions, text="写PID", command=self.send_pid_values).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(pid_actions, text="写加", command=self.send_closed_accel).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=3)
         ttk.Button(pid_actions, text="默认值", command=self.fill_default_motion_params).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=300).grid(
+        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=175).grid(
             row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
@@ -788,7 +793,7 @@ class AngleViewer(tk.Tk):
         ttk.Button(sequence, text="添加到流程", command=self.add_sequence_step).grid(
             row=2, column=0, sticky="ew", pady=(7, 5))
         self.sequence_tree = ttk.Treeview(sequence, columns=("index", "description"),
-                                          show="headings", height=11, selectmode="browse")
+                                          show="headings", height=6, selectmode="browse")
         self.sequence_tree.heading("index", text="#")
         self.sequence_tree.heading("description", text="动作")
         self.sequence_tree.column("index", width=28, anchor=tk.CENTER, stretch=False)
