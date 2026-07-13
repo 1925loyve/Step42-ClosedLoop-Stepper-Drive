@@ -665,19 +665,6 @@ class AngleViewer(tk.Tk):
                                         self.stream_status_var), start=5):
             ttk.Label(mode, textvariable=variable).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=1)
 
-        position_pid = ttk.LabelFrame(left, text="闭环位置参数", padding=8)
-        position_pid.pack(fill=tk.X, pady=(10, 0))
-        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var),
-                           ("Limit", self.limit_var), ("Accel", self.closed_accel_var),
-                           ("Deadband", self.deadband_var))
-        for row, (label, variable) in enumerate(position_fields):
-            ttk.Label(position_pid, text=label, width=10).grid(row=row, column=0, sticky=tk.W, pady=3)
-            ttk.Entry(position_pid, textvariable=variable, width=13).grid(row=row, column=1, pady=3)
-        ttk.Button(position_pid, text="写入 PID", command=self.send_pid_values).grid(row=0, column=2, rowspan=2, padx=(8, 0), sticky="nsew")
-        ttk.Button(position_pid, text="写入加速度", command=self.send_closed_accel).grid(row=2, column=2, rowspan=2, padx=(8, 0), sticky="nsew")
-        ttk.Button(position_pid, text="填入细分默认值", command=self.fill_default_motion_params).grid(row=4, column=2, rowspan=2, padx=(8, 0), sticky="nsew")
-        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=350).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(7, 0))
-
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
         ttk.Combobox(zero, textvariable=self.home_mode_var, values=list(HOME_MODE_LABELS.keys()),
@@ -686,6 +673,24 @@ class AngleViewer(tk.Tk):
         ttk.Button(zero, text="当前位置设为零点", command=self.send_set_zero).pack(side=tk.LEFT, padx=6)
         ttk.Button(zero, text="执行回零", command=self.send_home).pack(side=tk.LEFT, padx=6)
         ttk.Label(zero, textvariable=self.home_status_var).pack(side=tk.LEFT, padx=8)
+
+        position_pid = ttk.LabelFrame(center, text="闭环位置参数", padding=8)
+        position_pid.pack(fill=tk.X, pady=(10, 0))
+        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var),
+                           ("Limit", self.limit_var), ("Accel", self.closed_accel_var),
+                           ("Deadband", self.deadband_var))
+        for index, (label, variable) in enumerate(position_fields):
+            row = index // 3
+            column = (index % 3) * 2
+            ttk.Label(position_pid, text=label).grid(row=row, column=column, sticky=tk.W, padx=(0 if column == 0 else 10, 4), pady=3)
+            ttk.Entry(position_pid, textvariable=variable, width=10).grid(row=row, column=column + 1, sticky=tk.W, pady=3)
+        pid_actions = ttk.Frame(position_pid)
+        pid_actions.grid(row=0, column=6, rowspan=2, sticky="nsew", padx=(12, 0))
+        ttk.Button(pid_actions, text="写入 PID", command=self.send_pid_values).pack(fill=tk.X)
+        ttk.Button(pid_actions, text="写入加速度", command=self.send_closed_accel).pack(fill=tk.X, pady=3)
+        ttk.Button(pid_actions, text="填入细分默认值", command=self.fill_default_motion_params).pack(fill=tk.X)
+        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=620).grid(
+            row=2, column=0, columnspan=7, sticky=tk.W, pady=(5, 0))
 
         speed = ttk.LabelFrame(center, text="测试电机：开环速度", padding=8)
         speed.pack(fill=tk.X, pady=(10, 0))
@@ -806,14 +811,14 @@ class AngleViewer(tk.Tk):
         ttk.Label(wave_toolbar, textvariable=self.status_var).pack(side=tk.RIGHT)
         canvas_wrap = ttk.Frame(wave)
         canvas_wrap.pack(fill=tk.BOTH, expand=True)
-        self.wave_axis_canvas = tk.Canvas(canvas_wrap, width=66, height=190, bg="#101820", highlightthickness=1,
-                                          highlightbackground="#34404a")
+        self.wave_axis_canvas = tk.Canvas(canvas_wrap, width=66, height=190, bg="#f8fafc", highlightthickness=1,
+                                          highlightbackground="#cbd5e1")
         self.wave_axis_canvas.grid(row=0, column=0, sticky="ns")
         graph_wrap = ttk.Frame(canvas_wrap)
         graph_wrap.grid(row=0, column=1, sticky="nsew")
         canvas_wrap.columnconfigure(1, weight=1)
         canvas_wrap.rowconfigure(0, weight=1)
-        self.wave_canvas = tk.Canvas(graph_wrap, height=190, bg="#101820", highlightthickness=1, highlightbackground="#34404a")
+        self.wave_canvas = tk.Canvas(graph_wrap, height=190, bg="#f8fafc", highlightthickness=1, highlightbackground="#cbd5e1")
         self.wave_canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.wave_scroll = ttk.Scrollbar(graph_wrap, orient=tk.HORIZONTAL, command=self._wave_xview)
         self.wave_scroll.pack(side=tk.BOTTOM, fill=tk.X)
@@ -1698,16 +1703,16 @@ class AngleViewer(tk.Tk):
         for index in range(5):
             value = high - (high - low) * index / 4.0
             y = self._angle_to_y(value, low, high, top, graph_h)
-            axis.create_text(62, y, anchor=tk.E, text=f"{value:g}", fill="#8997a1", font=("Consolas", 9))
+            axis.create_text(62, y, anchor=tk.E, text=f"{value:g}", fill="#475569", font=("Consolas", 9))
         axis.create_text(62, top + graph_h + 16, anchor=tk.E,
                          text="deg" if self.interface_role_var.get() == "Error" else "error",
-                         fill="#8997a1", font=("Consolas", 8))
+                         fill="#475569", font=("Consolas", 8))
 
         history = list(self.wave_history)
         if len(history) == 0:
             canvas.configure(scrollregion=(0, 0, width, height))
             text = "等待多圈位置数据" if self.interface_role_var.get() == "Error" else "等待视觉误差数据"
-            canvas.create_text(width / 2, height / 2, text=text, fill="#b7c0c7", font=("Segoe UI", 12))
+            canvas.create_text(width / 2, height / 2, text=text, fill="#64748b", font=("Segoe UI", 12))
             return
 
         start_t = history[0][0]
@@ -1719,11 +1724,11 @@ class AngleViewer(tk.Tk):
         for index in range(5):
             value = high - (high - low) * index / 4.0
             y = self._angle_to_y(value, low, high, top, graph_h)
-            canvas.create_line(0, y, total_w - right_pad, y, fill="#26323a")
+            canvas.create_line(0, y, total_w - right_pad, y, fill="#d8e0e8")
 
         zero_y = self._angle_to_y(0.0, low, high, top, graph_h)
-        canvas.create_line(0, zero_y, total_w - right_pad, zero_y, fill="#5b6872", dash=(4, 3))
-        canvas.create_line(0, top + graph_h, total_w - right_pad, top + graph_h, fill="#5b6872")
+        canvas.create_line(0, zero_y, total_w - right_pad, zero_y, fill="#94a3b8", dash=(4, 3))
+        canvas.create_line(0, top + graph_h, total_w - right_pad, top + graph_h, fill="#94a3b8")
 
         def make_points(index):
             points = []
@@ -1743,9 +1748,9 @@ class AngleViewer(tk.Tk):
         current_points = make_points(1)
         target_points = make_points(2)
         if len(target_points) >= 4:
-            canvas.create_line(*target_points, fill="#f0a23a", width=2, smooth=False)
+            canvas.create_line(*target_points, fill="#d69e00", width=2, smooth=False)
         if len(current_points) >= 4:
-            canvas.create_line(*current_points, fill="#4aa3ff", width=2, smooth=False)
+            canvas.create_line(*current_points, fill="#111827", width=2, smooth=False)
 
         if self.wave_follow_var.get():
             canvas.xview_moveto(1.0)
