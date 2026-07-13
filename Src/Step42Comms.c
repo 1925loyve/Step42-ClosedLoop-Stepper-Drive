@@ -96,11 +96,23 @@ static int16_t Ctrl_ClampI16(float value)
   return (int16_t)value;
 }
 
+static int32_t Ctrl_ClampI32(float value)
+{
+  if (value > 2147483647.0f)
+  {
+    return 2147483647;
+  }
+  if (value < -2147483648.0f)
+  {
+    return (-2147483647 - 1);
+  }
+  return (int32_t)value;
+}
+
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[54];
+  uint8_t resp[58];
   uint16_t angle_cdeg;
-  uint16_t target_cdeg;
   int16_t pid_output;
   float kp;
   float ki;
@@ -160,43 +172,33 @@ void Step42Comms_SendQuery(uint8_t seq)
   Step42Slave_WriteI16(resp, 44U, Ctrl_ClampI16(Step42Tracking_GetSecondaryFeedback() * 100.0f));
   Step42Slave_WriteI16(resp, 46U, Ctrl_ClampI16(Step42Tracking_GetOutput()));
   resp[48] = Tmc2209_GetChopperMode();
-  target_cdeg = (uint16_t)(Step42Control_GetPositionTargetDeg() * 100.0f + 0.5f);
-  if (target_cdeg >= 36000U)
-  {
-    target_cdeg = 0U;
-  }
-  Step42Slave_WriteU16(resp, 49U, target_cdeg);
-  Step42Slave_WriteI16(resp, 51U,
-                       Ctrl_ClampI16(Step42Control_GetPositionErrorDeg() * 100.0f));
-  resp[53] = Step42Control_IsPositionPidActive();
+  Ctrl_WriteI32(resp, 49U,
+                Ctrl_ClampI32(Step42Control_GetPositionTargetDeg() * 100.0f));
+  Ctrl_WriteI32(resp, 53U,
+                Ctrl_ClampI32(Step42Control_GetPositionErrorDeg() * 100.0f));
+  resp[57] = Step42Control_IsPositionPidActive();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
 static void Step42Comms_SendTelemetry(void)
 {
-  uint8_t resp[12];
+  uint8_t resp[16];
   uint16_t angle_cdeg = (uint16_t)(Step42Control_GetAngleDeg() * 100.0f + 0.5f);
-  uint16_t target_cdeg =
-      (uint16_t)(Step42Control_GetPositionTargetDeg() * 100.0f + 0.5f);
 
   if (angle_cdeg >= 36000U)
   {
     angle_cdeg = 0U;
   }
-  if (target_cdeg >= 36000U)
-  {
-    target_cdeg = 0U;
-  }
-
   resp[0] = CTRL_STATUS_OK;
   Step42Slave_WriteU16(resp, 1U, angle_cdeg);
-  Step42Slave_WriteU16(resp, 3U, target_cdeg);
-  Step42Slave_WriteI16(resp, 5U,
-                       Ctrl_ClampI16(Step42Control_GetPositionErrorDeg() * 100.0f));
-  resp[7] = Step42Control_IsPositionPidActive();
-  Step42Slave_WriteI16(resp, 8U,
+  Ctrl_WriteI32(resp, 3U,
+                Ctrl_ClampI32(Step42Control_GetPositionTargetDeg() * 100.0f));
+  Ctrl_WriteI32(resp, 7U,
+                Ctrl_ClampI32(Step42Control_GetPositionErrorDeg() * 100.0f));
+  resp[11] = Step42Control_IsPositionPidActive();
+  Step42Slave_WriteI16(resp, 12U,
                        Ctrl_ClampI16(Step42Control_GetSpeedRpm() * 10.0f));
-  Step42Slave_WriteU16(resp, 10U, Step42Control_GetRawAngle());
+  Step42Slave_WriteU16(resp, 14U, Step42Control_GetRawAngle());
   Ctrl_SendFrame(CTRL_CMD_STREAM, 0U, resp, sizeof(resp));
 }
 
@@ -264,17 +266,24 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
   if (cmd == CTRL_CMD_ANGLE)
   {
-    uint16_t target_cdeg;
+    int32_t target_cdeg;
     float target_angle;
 
-    if (len != 2U)
+    if ((len != 2U) && (len != 4U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
 
-    target_cdeg = Step42Slave_ReadU16(payload);
-    if (target_cdeg > 36000U)
+    if (len == 2U)
+    {
+      target_cdeg = (int32_t)Step42Slave_ReadU16(payload);
+    }
+    else
+    {
+      target_cdeg = Ctrl_ReadI32(payload);
+    }
+    if ((target_cdeg < -720000) || (target_cdeg > 720000))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;

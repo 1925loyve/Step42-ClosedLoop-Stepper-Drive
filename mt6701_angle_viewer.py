@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
+import json
+import math
 import queue
 import struct
 import threading
 import time
 import tkinter as tk
 from collections import deque
-from tkinter import ttk, messagebox
+from tkinter import filedialog, ttk, messagebox
 
 try:
     import serial
@@ -250,9 +252,9 @@ class SerialReader:
 class AngleViewer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Step42 二进制协议调试")
-        self.geometry("1380x900")
-        self.minsize(1180, 760)
+        self.title("Step42 闭环步进驱动控制中心")
+        self.geometry("1840x1040")
+        self.minsize(1240, 780)
 
         self.frame_queue = queue.Queue()
         self.status_queue = queue.Queue()
@@ -277,6 +279,7 @@ class AngleViewer(tk.Tk):
 
         self.port_var = tk.StringVar()
         self.baud_var = tk.StringVar(value=str(BAUD_DEFAULT))
+        self.interface_role_var = tk.StringVar(value="Debug")
         self.auto_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="等待串口")
         self.raw_var = tk.StringVar(value="--")
@@ -339,6 +342,14 @@ class AngleViewer(tk.Tk):
         self.track_single_dead_var = tk.StringVar(value="0.08")
         self.track_outer_dead_var = tk.StringVar(value="0.08")
         self.track_inner_dead_var = tk.StringVar(value="0.08")
+        self.sequence_type_var = tk.StringVar(value="闭环多圈定位")
+        self.sequence_primary_var = tk.StringVar(value="200")
+        self.sequence_secondary_var = tk.StringVar(value="")
+        self.sequence_primary_label_var = tk.StringVar(value="目标角度 °")
+        self.sequence_secondary_label_var = tk.StringVar(value="")
+        self.sequence_status_var = tk.StringVar(value="指令仅保存在电脑，暂未写入驱动板。")
+        self.sequence_steps = []
+        self.sequence_tree = None
 
         self._build_ui()
         self.refresh_ports(auto_connect=True)
@@ -394,7 +405,7 @@ class AngleViewer(tk.Tk):
         self.after_idle(self._send_next_queued)
         return True
 
-    def _build_ui(self):
+    def _build_ui_legacy(self):
         root = ttk.Frame(self, padding=14)
         root.pack(fill=tk.BOTH, expand=True)
 
@@ -573,6 +584,290 @@ class AngleViewer(tk.Tk):
         self.wave_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.wave_canvas.configure(xscrollcommand=self.wave_scroll.set)
         self.wave_canvas.bind("<Configure>", lambda _event: self._redraw_waveform())
+
+    def _build_ui(self):
+        root = ttk.Frame(self, padding=10)
+        root.pack(fill=tk.BOTH, expand=True)
+        for column, weight in enumerate((0, 3, 0, 0)):
+            root.columnconfigure(column, weight=weight)
+        root.rowconfigure(1, weight=1)
+        root.rowconfigure(2, weight=1)
+
+        connection = ttk.LabelFrame(root, text="连接与通信", padding=8)
+        connection.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        ttk.Label(connection, text="串口").grid(row=0, column=0, sticky=tk.W)
+        self.port_combo = ttk.Combobox(connection, textvariable=self.port_var,
+                                       width=12, state="readonly")
+        self.port_combo.grid(row=0, column=1, padx=(4, 8))
+        ttk.Label(connection, text="波特率").grid(row=0, column=2, sticky=tk.W)
+        ttk.Entry(connection, textvariable=self.baud_var, width=9).grid(row=0, column=3, padx=(4, 8))
+        ttk.Combobox(connection, textvariable=self.interface_role_var,
+                     values=("Error", "Debug"), state="readonly", width=7).grid(row=0, column=4, padx=(0, 6))
+        ttk.Checkbutton(connection, text="自动连接", variable=self.auto_var).grid(row=0, column=5, sticky=tk.W)
+        ttk.Button(connection, text="刷新", command=self.refresh_ports).grid(row=1, column=0, pady=(7, 0), sticky="ew")
+        ttk.Button(connection, text="连接", command=self.connect_selected).grid(row=1, column=1, pady=(7, 0), sticky="ew")
+        ttk.Button(connection, text="断开", command=self.disconnect).grid(row=1, column=2, pady=(7, 0), sticky="ew")
+        ttk.Button(connection, text="查询状态", command=self.send_query).grid(row=1, column=3, columnspan=2, padx=(4, 0), pady=(7, 0), sticky="ew")
+
+        telemetry = ttk.Frame(root)
+        telemetry.grid(row=0, column=1, columnspan=3, sticky="ew")
+        metrics = (("绝对角度", self.abs_deg_var), ("零点角度", self.deg_var),
+                   ("当前转速 RPM", self.rpm_var), ("温度", self.temp_var),
+                   ("拨码通信模式", self.board_mode_var), ("连接接口", self.interface_role_var))
+        for column, (label, variable) in enumerate(metrics):
+            telemetry.columnconfigure(column, weight=1)
+            ttk.Label(telemetry, text=label).grid(row=0, column=column, sticky=tk.W, padx=(0 if column == 0 else 16, 0))
+            ttk.Label(telemetry, textvariable=variable, font=("Consolas", 21, "bold")).grid(
+                row=1, column=column, sticky=tk.W, padx=(0 if column == 0 else 16, 0))
+
+        left = ttk.Frame(root)
+        left.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=(12, 0))
+        center = ttk.Frame(root)
+        center.grid(row=1, column=1, sticky="nsew", padx=(0, 10), pady=(12, 0))
+        tracking = ttk.LabelFrame(root, text="内置误差 PID", padding=8)
+        tracking.grid(row=1, column=2, sticky="nsew", padx=(0, 10), pady=(12, 0))
+        sequence = ttk.LabelFrame(root, text="指令添加", padding=8)
+        sequence.grid(row=1, column=3, sticky="nsew", pady=(12, 0))
+
+        mode = ttk.LabelFrame(left, text="模式状态", padding=8)
+        mode.pack(fill=tk.X)
+        mode.columnconfigure(1, weight=1)
+        rows = (("工作模式", self.mode_var, list(MODE_LABELS.keys()), self.send_mode),
+                ("细分", self.microstep_var, ["1", "2", "4", "8", "16", "32", "64", "128", "256"], self.send_microstep),
+                ("斩波", self.chopper_mode_var, list(CHOPPER_MODE_LABELS.keys()), self.send_chopper_mode))
+        for row, (label, variable, values, command) in enumerate(rows):
+            ttk.Label(mode, text=label).grid(row=row, column=0, sticky=tk.W, pady=3)
+            combo = ttk.Combobox(mode, textvariable=variable, values=values, state="readonly", width=15)
+            combo.grid(row=row, column=1, sticky="ew", padx=5, pady=3)
+            if variable is self.microstep_var:
+                self.microstep_combo = combo
+                combo.bind("<<ComboboxSelected>>", self._on_microstep_selected)
+            ttk.Button(mode, text="设置", command=command, width=7).grid(row=row, column=2, pady=3)
+        action_row = ttk.Frame(mode)
+        action_row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(7, 4))
+        ttk.Button(action_row, text="使能电机", command=lambda: self.send_enable(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(action_row, text="失能电机", command=lambda: self.send_enable(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(action_row, text="停止", command=self.send_stop).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        stream_row = ttk.Frame(mode)
+        stream_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 5))
+        ttk.Button(stream_row, text="数据流开启", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(stream_row, text="数据流关闭", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        for row, variable in enumerate((self.mode_status_var, self.microstep_status_var,
+                                        self.chopper_status_var, self.enable_status_var,
+                                        self.stream_status_var), start=5):
+            ttk.Label(mode, textvariable=variable).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=1)
+
+        position_pid = ttk.LabelFrame(left, text="闭环位置参数", padding=8)
+        position_pid.pack(fill=tk.X, pady=(10, 0))
+        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var),
+                           ("Limit", self.limit_var), ("Accel", self.closed_accel_var),
+                           ("Deadband", self.deadband_var))
+        for row, (label, variable) in enumerate(position_fields):
+            ttk.Label(position_pid, text=label, width=10).grid(row=row, column=0, sticky=tk.W, pady=3)
+            ttk.Entry(position_pid, textvariable=variable, width=13).grid(row=row, column=1, pady=3)
+        ttk.Button(position_pid, text="写入 PID", command=self.send_pid_values).grid(row=0, column=2, rowspan=2, padx=(8, 0), sticky="nsew")
+        ttk.Button(position_pid, text="写入加速度", command=self.send_closed_accel).grid(row=2, column=2, rowspan=2, padx=(8, 0), sticky="nsew")
+        ttk.Button(position_pid, text="填入细分默认值", command=self.fill_default_motion_params).grid(row=4, column=2, rowspan=2, padx=(8, 0), sticky="nsew")
+        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=350).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(7, 0))
+
+        zero = ttk.LabelFrame(center, text="零点设置", padding=8)
+        zero.pack(fill=tk.X)
+        ttk.Combobox(zero, textvariable=self.home_mode_var, values=list(HOME_MODE_LABELS.keys()),
+                     width=14, state="readonly").pack(side=tk.LEFT)
+        ttk.Button(zero, text="设置回零模式", command=self.send_home_mode).pack(side=tk.LEFT, padx=6)
+        ttk.Button(zero, text="当前位置设为零点", command=self.send_set_zero).pack(side=tk.LEFT, padx=6)
+        ttk.Button(zero, text="执行回零", command=self.send_home).pack(side=tk.LEFT, padx=6)
+        ttk.Label(zero, textvariable=self.home_status_var).pack(side=tk.LEFT, padx=8)
+
+        speed = ttk.LabelFrame(center, text="测试电机：开环速度", padding=8)
+        speed.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(speed, text="目标速度").pack(side=tk.LEFT)
+        ttk.Entry(speed, textvariable=self.speed_var, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Combobox(speed, textvariable=self.speed_unit_var, values=["RPM", "脉冲/s"],
+                     state="readonly", width=8).pack(side=tk.LEFT)
+        ttk.Label(speed, text="加速度").pack(side=tk.LEFT, padx=(12, 4))
+        ttk.Entry(speed, textvariable=self.accel_var, width=9).pack(side=tk.LEFT)
+        ttk.Button(speed, text="运行速度", command=self.send_speed_value).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Button(speed, text="停止", command=self.send_stop).pack(side=tk.LEFT)
+        ttk.Label(speed, textvariable=self.speed_status_var).pack(side=tk.LEFT, padx=10)
+
+        motion = ttk.LabelFrame(center, text="位置模式", padding=8)
+        motion.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        pulse = ttk.LabelFrame(motion, text="脉冲移动", padding=8)
+        pulse.pack(fill=tk.X)
+        for label, variable, width in (("脉冲数", self.move_steps_var, 12), ("速度", self.move_speed_var, 9), ("加速度", self.move_accel_var, 9)):
+            ttk.Label(pulse, text=label).pack(side=tk.LEFT, padx=(0 if label == "脉冲数" else 10, 4))
+            ttk.Entry(pulse, textvariable=variable, width=width).pack(side=tk.LEFT)
+        ttk.Button(pulse, text="发送脉冲", command=self.send_move_steps).pack(side=tk.LEFT, padx=10)
+        ttk.Label(pulse, textvariable=self.move_status_var).pack(side=tk.LEFT)
+        absolute = ttk.LabelFrame(motion, text="闭环多圈绝对定位", padding=8)
+        absolute.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(absolute, text="目标角度 -7200° ~ 7200°").pack(side=tk.LEFT)
+        ttk.Entry(absolute, textvariable=self.target_angle_var, width=14).pack(side=tk.LEFT, padx=7)
+        ttk.Button(absolute, text="发送角度", command=self.send_angle_value).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(absolute, textvariable=self.angle_status_var).pack(side=tk.LEFT)
+
+        ttk.Label(tracking, text="基础配置").grid(row=0, column=0, columnspan=4, sticky=tk.W)
+        ttk.Combobox(tracking, textvariable=self.track_mode_var, values=list(TRACK_MODE_LABELS.keys()),
+                     state="readonly", width=13).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(3, 6))
+        for row, (label, variable) in enumerate((("速度 %", self.track_speed_pct_var),
+                                                  ("加速度 %", self.track_accel_pct_var),
+                                                  ("频率 kHz", self.track_freq_var)), start=2):
+            ttk.Label(tracking, text=label).grid(row=row, column=0, sticky=tk.W, pady=2)
+            ttk.Entry(tracking, textvariable=variable, width=8).grid(row=row, column=1, sticky=tk.W, pady=2)
+        ttk.Button(tracking, text="写入基础", command=self.send_track_basic).grid(row=1, column=2, columnspan=2, sticky="ew", padx=(6, 0), pady=(3, 2))
+        ttk.Button(tracking, text="读取参数", command=self.send_track_query).grid(row=2, column=2, columnspan=2, sticky="ew", padx=(6, 0), pady=2)
+        ttk.Button(tracking, text="恢复默认", command=self.send_track_defaults).grid(row=3, column=2, sticky="ew", padx=(6, 2), pady=2)
+        ttk.Button(tracking, text="高级参数", command=self.open_track_advanced).grid(row=3, column=3, sticky="ew", padx=(2, 0), pady=2)
+        ttk.Separator(tracking).grid(row=4, column=0, columnspan=4, sticky="ew", pady=8)
+        for column, text in enumerate(("环", "Kp", "Ki", "Kd")):
+            ttk.Label(tracking, text=text).grid(row=5, column=column, sticky=tk.W, pady=(0, 3))
+        loop_rows = (("单环", self.track_single_kp_var, self.track_single_ki_var, self.track_single_kd_var, 0),
+                     ("外环", self.track_outer_kp_var, self.track_outer_ki_var, self.track_outer_kd_var, 1),
+                     ("内环", self.track_inner_kp_var, self.track_inner_ki_var, self.track_inner_kd_var, 2))
+        for row, (name, kp, ki, kd, loop) in enumerate(loop_rows, start=6):
+            ttk.Label(tracking, text=name).grid(row=row, column=0, sticky=tk.W, pady=2)
+            for column, variable in enumerate((kp, ki, kd), start=1):
+                ttk.Entry(tracking, textvariable=variable, width=8).grid(row=row, column=column, padx=(0, 3), pady=2)
+            ttk.Button(tracking, text="写入", command=lambda value=loop: self.send_track_pid(value)).grid(row=row, column=4, padx=(4, 0), pady=2)
+        ttk.Separator(tracking).grid(row=9, column=0, columnspan=5, sticky="ew", pady=8)
+        ttk.Label(tracking, text="测试误差").grid(row=10, column=0, sticky=tk.W)
+        ttk.Entry(tracking, textvariable=self.track_primary_var, width=8).grid(row=10, column=1)
+        ttk.Label(tracking, text="反馈").grid(row=10, column=2, sticky=tk.W)
+        ttk.Entry(tracking, textvariable=self.track_secondary_var, width=8).grid(row=10, column=3)
+        ttk.Button(tracking, text="发送", command=self.send_track_input).grid(row=10, column=4, padx=(4, 0))
+        ttk.Label(tracking, textvariable=self.track_status_var, wraplength=350).grid(row=11, column=0, columnspan=5, sticky=tk.W, pady=(8, 0))
+
+        sequence.columnconfigure(0, weight=1)
+        sequence.columnconfigure(1, weight=1)
+        command_values = ("闭环多圈定位", "开环脉冲移动", "延时", "回零", "切换工作模式", "启用内置误差PID", "停止电机")
+        command_box = ttk.Combobox(sequence, textvariable=self.sequence_type_var, values=command_values, state="readonly")
+        command_box.grid(row=0, column=0, columnspan=2, sticky="ew")
+        command_box.bind("<<ComboboxSelected>>", self._sequence_command_changed)
+        ttk.Label(sequence, textvariable=self.sequence_primary_label_var).grid(row=1, column=0, sticky=tk.W, pady=(8, 2))
+        ttk.Label(sequence, textvariable=self.sequence_secondary_label_var).grid(row=1, column=1, sticky=tk.W, pady=(8, 2))
+        ttk.Entry(sequence, textvariable=self.sequence_primary_var).grid(row=2, column=0, sticky="ew", padx=(0, 3))
+        ttk.Entry(sequence, textvariable=self.sequence_secondary_var).grid(row=2, column=1, sticky="ew", padx=(3, 0))
+        ttk.Button(sequence, text="添加指令", command=self.add_sequence_step).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(7, 5))
+        self.sequence_tree = ttk.Treeview(sequence, columns=("type", "primary", "secondary"), show="headings", height=13, selectmode="browse")
+        self.sequence_tree.heading("type", text="指令")
+        self.sequence_tree.heading("primary", text="参数一")
+        self.sequence_tree.heading("secondary", text="参数二")
+        self.sequence_tree.column("type", width=112, anchor=tk.W)
+        self.sequence_tree.column("primary", width=82, anchor=tk.W)
+        self.sequence_tree.column("secondary", width=82, anchor=tk.W)
+        self.sequence_tree.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        sequence.rowconfigure(4, weight=1)
+        ttk.Button(sequence, text="上移", command=lambda: self.move_sequence_step(-1)).grid(row=5, column=0, sticky="ew", pady=(6, 2))
+        ttk.Button(sequence, text="下移", command=lambda: self.move_sequence_step(1)).grid(row=5, column=1, sticky="ew", padx=(3, 0), pady=(6, 2))
+        ttk.Button(sequence, text="删除", command=self.remove_sequence_step).grid(row=6, column=0, sticky="ew", pady=2)
+        ttk.Button(sequence, text="清空", command=self.clear_sequence_steps).grid(row=6, column=1, sticky="ew", padx=(3, 0), pady=2)
+        ttk.Button(sequence, text="保存指令 JSON", command=self.save_sequence).grid(row=7, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(sequence, text="载入指令 JSON", command=self.load_sequence).grid(row=7, column=1, sticky="ew", padx=(3, 0), pady=(8, 0))
+        ttk.Label(sequence, textvariable=self.sequence_status_var, wraplength=260).grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+
+        wave = ttk.LabelFrame(root, text="目标 / 当前角度 / 视觉误差波形", padding=8)
+        wave.grid(row=2, column=0, columnspan=4, sticky="nsew", pady=(12, 0))
+        wave_toolbar = ttk.Frame(wave)
+        wave_toolbar.pack(fill=tk.X, pady=(0, 5))
+        ttk.Checkbutton(wave_toolbar, text="暂停波形", variable=self.wave_paused_var).pack(side=tk.LEFT)
+        ttk.Checkbutton(wave_toolbar, text="跟随最新", variable=self.wave_follow_var).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(wave_toolbar, text="放大", command=lambda: self.zoom_waveform(1.35)).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(wave_toolbar, text="缩小", command=lambda: self.zoom_waveform(1.0 / 1.35)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(wave_toolbar, text="清空波形", command=self.clear_waveform).pack(side=tk.LEFT, padx=(7, 0))
+        ttk.Label(wave_toolbar, textvariable=self.status_var).pack(side=tk.RIGHT)
+        canvas_wrap = ttk.Frame(wave)
+        canvas_wrap.pack(fill=tk.BOTH, expand=True)
+        self.wave_canvas = tk.Canvas(canvas_wrap, height=230, bg="#101820", highlightthickness=1, highlightbackground="#34404a")
+        self.wave_canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.wave_scroll = ttk.Scrollbar(canvas_wrap, orient=tk.HORIZONTAL, command=self._wave_xview)
+        self.wave_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.wave_canvas.configure(xscrollcommand=self.wave_scroll.set)
+        self.wave_canvas.bind("<Configure>", lambda _event: self._redraw_waveform())
+
+    def _sequence_command_changed(self, _event=None):
+        labels = {
+            "闭环多圈定位": ("目标角度 °", ""),
+            "开环脉冲移动": ("脉冲数", "速度,加速度"),
+            "延时": ("延时 ms", ""),
+            "回零": ("回零方式", ""),
+            "切换工作模式": ("模式名称", ""),
+            "启用内置误差PID": ("单环 / 串级", ""),
+            "停止电机": ("", ""),
+        }
+        primary, secondary = labels.get(self.sequence_type_var.get(), ("参数一", "参数二"))
+        self.sequence_primary_label_var.set(primary)
+        self.sequence_secondary_label_var.set(secondary)
+
+    def _refresh_sequence_tree(self, select_index=None):
+        for node in self.sequence_tree.get_children():
+            self.sequence_tree.delete(node)
+        for index, step in enumerate(self.sequence_steps):
+            node = self.sequence_tree.insert("", tk.END, iid=str(index), values=(step["type"], step["primary"], step["secondary"]))
+            if select_index == index:
+                self.sequence_tree.selection_set(node)
+
+    def add_sequence_step(self):
+        step = {"type": self.sequence_type_var.get(), "primary": self.sequence_primary_var.get().strip(),
+                "secondary": self.sequence_secondary_var.get().strip()}
+        if step["type"] in ("闭环多圈定位", "延时") and not step["primary"]:
+            self.sequence_status_var.set("该指令需要填写第一个参数。")
+            return
+        self.sequence_steps.append(step)
+        self._refresh_sequence_tree(len(self.sequence_steps) - 1)
+        self.sequence_status_var.set(f"已添加第 {len(self.sequence_steps)} 条，仅保存在上位机。")
+
+    def _selected_sequence_index(self):
+        selected = self.sequence_tree.selection() if self.sequence_tree else ()
+        return int(selected[0]) if selected else None
+
+    def remove_sequence_step(self):
+        index = self._selected_sequence_index()
+        if index is None:
+            return
+        self.sequence_steps.pop(index)
+        self._refresh_sequence_tree(min(index, len(self.sequence_steps) - 1))
+
+    def move_sequence_step(self, delta):
+        index = self._selected_sequence_index()
+        if index is None:
+            return
+        destination = index + delta
+        if destination < 0 or destination >= len(self.sequence_steps):
+            return
+        self.sequence_steps[index], self.sequence_steps[destination] = self.sequence_steps[destination], self.sequence_steps[index]
+        self._refresh_sequence_tree(destination)
+
+    def clear_sequence_steps(self):
+        self.sequence_steps.clear()
+        self._refresh_sequence_tree()
+        self.sequence_status_var.set("已清空本机指令列表。")
+
+    def save_sequence(self):
+        path = filedialog.asksaveasfilename(title="保存指令列表", defaultextension=".json",
+                                            initialfile="step42_command_sequence.json",
+                                            filetypes=(("JSON 指令", "*.json"), ("所有文件", "*.*")))
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump({"format": "step42-command-sequence-v1", "steps": self.sequence_steps}, file,
+                      ensure_ascii=False, indent=2)
+        self.sequence_status_var.set("指令列表已保存到电脑，尚未写入驱动板。")
+
+    def load_sequence(self):
+        path = filedialog.askopenfilename(title="载入指令列表", filetypes=(("JSON 指令", "*.json"), ("所有文件", "*.*")))
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                data = json.load(file)
+            if data.get("format") != "step42-command-sequence-v1":
+                raise ValueError("不是 Step42 指令列表文件")
+            self.sequence_steps = list(data.get("steps", []))
+            self._refresh_sequence_tree()
+            self.sequence_status_var.set(f"已载入 {len(self.sequence_steps)} 条本机指令。")
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            self.sequence_status_var.set(f"指令列表载入失败：{error}")
 
     def refresh_ports(self, auto_connect=False):
         if list_ports is None:
@@ -806,10 +1101,10 @@ class AngleViewer(tk.Tk):
         except ValueError:
             self.angle_status_var.set("角度：请输入有效数字")
             return
-        if angle < 0.0 or angle > 360.0:
-            self.angle_status_var.set("角度：范围必须是 0~360")
+        if angle < -7200.0 or angle > 7200.0:
+            self.angle_status_var.set("角度：范围必须是 -7200~7200")
             return
-        payload = struct.pack("<H", int(round(angle * 100)))
+        payload = struct.pack("<i", int(round(angle * 100)))
         if self._send(CMD_ANGLE, payload, {"target_angle": angle}):
             self.angle_status_var.set(f"角度：等待设备确认 {angle:.3f}°")
 
@@ -958,20 +1253,20 @@ class AngleViewer(tk.Tk):
 
     def _process_frame(self, cmd, seq, payload):
         completed_pending = self._complete_pending(cmd, seq, payload)
-        if cmd == CMD_STREAM and seq == 0 and len(payload) >= 10:
+        if cmd == CMD_STREAM and seq == 0 and len(payload) >= 16:
             status = payload[0]
-            current_cdeg, target_cdeg, error_cdeg = struct.unpack("<HHh", payload[1:7])
-            pid_active = payload[7]
-            rpm_x10 = struct.unpack("<h", payload[8:10])[0]
+            current_cdeg = struct.unpack("<H", payload[1:3])[0]
+            target_cdeg, error_cdeg = struct.unpack("<ii", payload[3:11])
+            pid_active = payload[11]
+            rpm_x10 = struct.unpack("<h", payload[12:14])[0]
             now = time.monotonic()
             self.current_angle_deg = current_cdeg / 100.0
             self.target_angle_deg = target_cdeg / 100.0
             self.deg_var.set(f"{self.current_angle_deg:7.3f}°")
-            if len(payload) >= 12:
-                raw = struct.unpack("<H", payload[10:12])[0]
-                absolute_deg = (float(raw & 0x3FFF) * 360.0) / RAW_MAX
-                self.raw_var.set(f"{raw:5d}")
-                self.abs_deg_var.set(f"{absolute_deg:7.3f}°")
+            raw = struct.unpack("<H", payload[14:16])[0]
+            absolute_deg = (float(raw & 0x3FFF) * 360.0) / RAW_MAX
+            self.raw_var.set(f"{raw:5d}")
+            self.abs_deg_var.set(f"{absolute_deg:7.3f}°")
             if (now - self.last_rpm_display_time) >= RPM_DISPLAY_INTERVAL:
                 self.rpm_var.set(f"{rpm_x10 / 10.0:7.2f}")
                 self.last_rpm_display_time = now
@@ -1014,11 +1309,11 @@ class AngleViewer(tk.Tk):
                 primary_x100, secondary_x100, track_output = struct.unpack("<hhh", payload[42:48])
                 chopper_mode = payload[48] if len(payload) >= 49 else None
                 position_state = None
-                if len(payload) >= 54:
-                    target_cdeg = struct.unpack("<H", payload[49:51])[0]
-                    error_cdeg = struct.unpack("<h", payload[51:53])[0]
+                if len(payload) >= 58:
+                    target_cdeg = struct.unpack("<i", payload[49:53])[0]
+                    error_cdeg = struct.unpack("<i", payload[53:57])[0]
                     position_state = (target_cdeg / 100.0, error_cdeg / 100.0,
-                                      payload[53])
+                                      payload[57])
                 extended = (board_mode, sensor_flags, temp_cdeg / 100.0, rpm_x10 / 10.0,
                             track_mode, track_freq, track_speed, track_accel,
                             primary_x100 / 100.0, secondary_x100 / 100.0,
@@ -1231,9 +1526,11 @@ class AngleViewer(tk.Tk):
             self.wave_history.popleft()
         self._redraw_waveform()
 
-    def _angle_to_y(self, angle, top, height):
-        angle = max(0.0, min(360.0, float(angle)))
-        return top + (360.0 - angle) * height / 360.0
+    def _angle_to_y(self, angle, low, high, top, height):
+        if high <= low:
+            return top + height / 2.0
+        value = max(low, min(high, float(angle)))
+        return top + (high - value) * height / (high - low)
 
     def _redraw_waveform(self):
         if not hasattr(self, "wave_canvas"):
@@ -1256,14 +1553,23 @@ class AngleViewer(tk.Tk):
 
         start_t = history[0][0]
         end_t = max(history[-1][0], start_t + 1.0)
+        values = [value for _time, current, target in history for value in (current, target)
+                  if value is not None]
+        low = math.floor(min(values) / 360.0) * 360.0
+        high = math.ceil(max(values) / 360.0) * 360.0
+        if (high - low) < 360.0:
+            center = (high + low) / 2.0
+            low = center - 180.0
+            high = center + 180.0
         graph_w = max(width - left - right_pad, int((end_t - start_t) * self.wave_pixels_per_second) + 80)
         total_w = left + graph_w + right_pad
         canvas.configure(scrollregion=(0, 0, total_w, height))
 
-        for angle in (0, 90, 180, 270, 360):
-            y = self._angle_to_y(angle, top, graph_h)
+        for index in range(5):
+            angle = low + (high - low) * index / 4.0
+            y = self._angle_to_y(angle, low, high, top, graph_h)
             canvas.create_line(left, y, total_w - right_pad, y, fill="#26323a")
-            canvas.create_text(8, y, anchor=tk.W, text=str(angle), fill="#8997a1", font=("Consolas", 9))
+            canvas.create_text(8, y, anchor=tk.W, text=f"{angle:g}", fill="#8997a1", font=("Consolas", 9))
 
         canvas.create_line(left, top, left, top + graph_h, fill="#5b6872")
         canvas.create_line(left, top + graph_h, total_w - right_pad, top + graph_h, fill="#5b6872")
@@ -1279,7 +1585,7 @@ class AngleViewer(tk.Tk):
                     continue
                 last_value = value
                 x = left + (t - start_t) * self.wave_pixels_per_second
-                y = self._angle_to_y(value, top, graph_h)
+                y = self._angle_to_y(value, low, high, top, graph_h)
                 points.extend((x, y))
             return points
 

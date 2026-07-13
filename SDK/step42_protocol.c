@@ -245,21 +245,21 @@ uint16_t Step42_BuildEnable(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t
 
 uint16_t Step42_BuildSetAngle(uint8_t *buf, uint16_t max_len, uint8_t seq, float angle_deg)
 {
-    uint8_t payload[2];
-    uint16_t angle_cdeg;
+    uint8_t payload[4];
+    int32_t angle_cdeg;
 
-    if ((angle_deg < 0.0f) || (angle_deg > 360.0f))
+    if ((angle_deg < -7200.0f) || (angle_deg > 7200.0f))
     {
         return 0U;
     }
 
-    angle_cdeg = Step42_FloatToU16Scaled(angle_deg, 100.0f);
-    if (angle_cdeg > 36000U)
+    angle_cdeg = (int32_t)(angle_deg * 100.0f + ((angle_deg >= 0.0f) ? 0.5f : -0.5f));
+    if ((angle_cdeg < -720000) || (angle_cdeg > 720000))
     {
         return 0U;
     }
 
-    Step42_WriteU16(payload, 0U, angle_cdeg);
+    Step42_WriteI32(payload, 0U, angle_cdeg);
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_ANGLE, seq, payload, sizeof(payload));
 }
 
@@ -624,13 +624,13 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     {
         status->chopper_mode = response->payload[48];
     }
-    if (response->len >= 54U)
+    if (response->len >= 58U)
     {
         status->position_target_deg =
-            ((float)Step42_ReadU16(response->payload, 49U)) / 100.0f;
+            ((float)Step42_ReadI32(response->payload, 49U)) / 100.0f;
         status->position_error_deg =
-            ((float)Step42_ReadI16(response->payload, 51U)) / 100.0f;
-        status->position_pid_active = response->payload[53];
+            ((float)Step42_ReadI32(response->payload, 53U)) / 100.0f;
+        status->position_pid_active = response->payload[57];
     }
     return 0;
 }
@@ -650,18 +650,22 @@ int Step42_DecodeStreamTelemetry(const Step42_Response *response,
     telemetry->status = response->payload[0];
     telemetry->current_angle_deg =
         ((float)Step42_ReadU16(response->payload, 1U)) / 100.0f;
-    telemetry->target_angle_deg =
-        ((float)Step42_ReadU16(response->payload, 3U)) / 100.0f;
-    telemetry->position_error_deg =
-        ((float)Step42_ReadI16(response->payload, 5U)) / 100.0f;
-    telemetry->position_pid_active = response->payload[7];
-    telemetry->speed_rpm =
-        ((float)Step42_ReadI16(response->payload, 8U)) / 10.0f;
+    telemetry->target_angle_deg = 0.0f;
+    telemetry->position_error_deg = 0.0f;
+    telemetry->position_pid_active = 0U;
+    telemetry->speed_rpm = 0.0f;
     telemetry->raw_angle = 0U;
     telemetry->absolute_angle_deg = 0.0f;
-    if (response->len >= 12U)
+    if (response->len >= 16U)
     {
-        telemetry->raw_angle = Step42_ReadU16(response->payload, 10U);
+        telemetry->target_angle_deg =
+            ((float)Step42_ReadI32(response->payload, 3U)) / 100.0f;
+        telemetry->position_error_deg =
+            ((float)Step42_ReadI32(response->payload, 7U)) / 100.0f;
+        telemetry->position_pid_active = response->payload[11];
+        telemetry->speed_rpm =
+            ((float)Step42_ReadI16(response->payload, 12U)) / 10.0f;
+        telemetry->raw_angle = Step42_ReadU16(response->payload, 14U);
         telemetry->absolute_angle_deg =
             ((float)(telemetry->raw_angle & 0x3FFFU)) * 360.0f / 16384.0f;
     }

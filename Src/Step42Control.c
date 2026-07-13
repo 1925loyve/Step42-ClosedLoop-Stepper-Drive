@@ -20,6 +20,7 @@
 #define SPEED_ESTIMATE_WINDOW_S (0.020f)
 #define SPEED_FILTER_ALPHA (0.25f)
 #define WEAK_PID_MIN_CORRECTION_SPEED (80.0f)
+#define ENCODER_UNWRAP_REBASE_DEG (7200.0f)
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim6;
@@ -257,6 +258,15 @@ static void Encoder_RebaseUnwrapped(void)
   }
 }
 
+static void Encoder_RebaseFromTimer(void)
+{
+  mt6701_unwrapped_deg = mt6701_angle_deg;
+  mt6701_last_raw = mt6701_raw_angle;
+  speed_feedback_valid = 0U;
+  speed_accum_delta_deg = 0.0f;
+  speed_accum_time_s = 0.0f;
+}
+
 static void Motor_EnableOutput(void)
 {
   if (thermal_lockout == 0U)
@@ -372,7 +382,8 @@ static void Move_ToAbsoluteAngle(float target_angle)
     Step42Control_SetUserEnable(1U);
   }
 
-  weak_pid_target_deg = MapAngleToCurrentCycle(target_angle);
+  /* Multi-turn absolute coordinates are referenced to the stored zero point. */
+  weak_pid_target_deg = target_angle;
   PID_Reset(&weak_pid);
   weak_pid_enable = 1U;
   led_white_on;
@@ -934,6 +945,14 @@ uint8_t Step42Control_TimerTick1kHz(void)
   mt6701_angle_deg = Normalize360(PID_RawToDeg(raw_angle) - zero_offset_deg);
   {
     float unwrapped_angle = MT6701_UpdateUnwrappedDeg(raw_angle);
+
+    /* Speed and tracking modes do not need an ever-growing angle coordinate. */
+    if ((control_mode != CTRL_MODE_CLOSED_POSITION) &&
+        (AbsF(unwrapped_angle) >= ENCODER_UNWRAP_REBASE_DEG))
+    {
+      Encoder_RebaseFromTimer();
+      unwrapped_angle = mt6701_unwrapped_deg;
+    }
     if (speed_feedback_valid == 0U)
     {
       speed_last_unwrapped_deg = unwrapped_angle;
@@ -1005,7 +1024,7 @@ float Step42Control_GetPidOutputSteps(void)
 
 float Step42Control_GetPositionTargetDeg(void)
 {
-  return Normalize360(weak_pid_target_deg);
+  return weak_pid_target_deg;
 }
 
 float Step42Control_GetPositionErrorDeg(void)
