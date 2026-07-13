@@ -657,7 +657,7 @@ class AngleViewer(tk.Tk):
             if variable is self.microstep_var:
                 self.microstep_combo = combo
                 combo.bind("<<ComboboxSelected>>", self._on_microstep_selected)
-            ttk.Button(mode, text="设", command=command, width=3).grid(row=row, column=2, pady=3)
+            ttk.Button(mode, text="设置", command=command, width=5).grid(row=row, column=2, pady=3)
         action_row = ttk.Frame(mode)
         action_row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(7, 4))
         ttk.Button(action_row, text="使能", command=lambda: self.send_enable(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -665,8 +665,8 @@ class AngleViewer(tk.Tk):
         ttk.Button(action_row, text="停止", command=self.send_stop).pack(side=tk.LEFT, fill=tk.X, expand=True)
         stream_row = ttk.Frame(mode)
         stream_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 5))
-        ttk.Button(stream_row, text="流开", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(stream_row, text="流关", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
+        ttk.Button(stream_row, text="数据流开启", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(stream_row, text="数据流关闭", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
         for row, variable in enumerate((self.mode_status_var, self.microstep_status_var,
                                         self.chopper_status_var, self.enable_status_var,
                                         self.stream_status_var), start=5):
@@ -674,9 +674,9 @@ class AngleViewer(tk.Tk):
 
         position_pid = ttk.LabelFrame(left, text="闭环位置参数", padding=7)
         position_pid.pack(fill=tk.X, pady=(8, 0))
-        position_fields = (("P", self.kp_var), ("I", self.ki_var), ("D", self.kd_var),
-                           ("Lim", self.limit_var), ("Acc", self.closed_accel_var),
-                           ("Dead", self.deadband_var))
+        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var),
+                           ("限幅", self.limit_var), ("加速", self.closed_accel_var),
+                           ("死区", self.deadband_var))
         for index, (label, variable) in enumerate(position_fields):
             row = index // 2
             column = (index % 2) * 2
@@ -686,13 +686,13 @@ class AngleViewer(tk.Tk):
                 row=row, column=column + 1, sticky=tk.W, pady=2)
         pid_actions = ttk.Frame(position_pid)
         pid_actions.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(5, 0))
-        ttk.Button(pid_actions, text="写PID", command=self.send_pid_values).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(pid_actions, text="写加", command=self.send_closed_accel).pack(
+        ttk.Button(pid_actions, text="写入 PID", command=self.send_pid_values).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(pid_actions, text="写入加速度", command=self.send_closed_accel).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=3)
-        ttk.Button(pid_actions, text="默认值", command=self.fill_default_motion_params).pack(
-            side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(position_pid, text="填入默认参数", command=self.fill_default_motion_params).grid(
+            row=4, column=0, columnspan=4, sticky="ew", pady=(3, 0))
         ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=175).grid(
-            row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+            row=5, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
@@ -714,9 +714,9 @@ class AngleViewer(tk.Tk):
                      state="readonly", width=7).grid(row=0, column=2, padx=(0, 8))
         ttk.Label(speed, text="加速度").grid(row=0, column=3, sticky=tk.W)
         ttk.Entry(speed, textvariable=self.accel_var, width=8).grid(row=0, column=4, padx=4)
-        ttk.Button(speed, text="运行速度", command=self.send_speed_value).grid(row=0, column=5, padx=(5, 3))
-        ttk.Button(speed, text="停止", command=self.send_stop).grid(row=0, column=6)
-        ttk.Label(speed, textvariable=self.speed_status_var).grid(row=1, column=0, columnspan=7, sticky=tk.W, pady=(5, 0))
+        ttk.Button(speed, text="运行速度", command=self.send_speed_value).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+        ttk.Button(speed, text="停止电机", command=self.send_stop).grid(row=1, column=3, columnspan=2, sticky="ew", padx=(5, 0), pady=(5, 0))
+        ttk.Label(speed, textvariable=self.speed_status_var).grid(row=2, column=0, columnspan=5, sticky=tk.W, pady=(5, 0))
 
         pulse = ttk.LabelFrame(test_motor, text="脉冲位置移动", padding=7)
         pulse.pack(fill=tk.X, pady=(8, 0))
@@ -726,15 +726,17 @@ class AngleViewer(tk.Tk):
             column = index * 2
             ttk.Label(pulse, text=label).grid(row=0, column=column, sticky=tk.W, padx=(0 if index == 0 else 8, 3))
             ttk.Entry(pulse, textvariable=variable, width=width).grid(row=0, column=column + 1, padx=(0, 2))
-        ttk.Button(pulse, text="发送脉冲", command=self.send_move_steps).grid(row=0, column=6, padx=(6, 0))
-        ttk.Label(pulse, textvariable=self.move_status_var).grid(row=1, column=0, columnspan=7, sticky=tk.W, pady=(5, 0))
+        ttk.Button(pulse, text="发送脉冲位置指令", command=self.send_move_steps).grid(
+            row=1, column=0, columnspan=6, sticky="ew", pady=(5, 0))
+        ttk.Label(pulse, textvariable=self.move_status_var).grid(row=2, column=0, columnspan=6, sticky=tk.W, pady=(5, 0))
 
         absolute = ttk.LabelFrame(test_motor, text="闭环多圈位置", padding=7)
         absolute.pack(fill=tk.X, pady=(8, 0))
         ttk.Label(absolute, text="目标 -7200° ~ 7200°").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(absolute, textvariable=self.target_angle_var, width=11).grid(row=0, column=1, padx=5)
-        ttk.Button(absolute, text="发送角度", command=self.send_angle_value).grid(row=0, column=2, padx=(0, 6))
-        ttk.Label(absolute, textvariable=self.angle_status_var).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(5, 0))
+        ttk.Button(absolute, text="发送闭环角度指令", command=self.send_angle_value).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        ttk.Label(absolute, textvariable=self.angle_status_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
 
         tracking_base = ttk.LabelFrame(tracking, text="基础配置", padding=6)
         tracking_base.pack(fill=tk.X)
