@@ -678,21 +678,21 @@ class AngleViewer(tk.Tk):
                            ("限幅", self.limit_var), ("加速", self.closed_accel_var),
                            ("死区", self.deadband_var))
         for index, (label, variable) in enumerate(position_fields):
-            row = index // 2
-            column = (index % 2) * 2
+            row = index // 3
+            column = (index % 3) * 2
             ttk.Label(position_pid, text=label).grid(
-                row=row, column=column, sticky=tk.W, padx=(0 if column == 0 else 8, 3), pady=2)
+                row=row, column=column, sticky=tk.W, padx=(0 if column == 0 else 5, 2), pady=2)
             ttk.Entry(position_pid, textvariable=variable, width=5).grid(
                 row=row, column=column + 1, sticky=tk.W, pady=2)
         pid_actions = ttk.Frame(position_pid)
-        pid_actions.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(5, 0))
+        pid_actions.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(5, 0))
         ttk.Button(pid_actions, text="写入 PID", command=self.send_pid_values).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(pid_actions, text="写入加速度", command=self.send_closed_accel).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=3)
-        ttk.Button(position_pid, text="填入默认参数", command=self.fill_default_motion_params).grid(
-            row=4, column=0, columnspan=4, sticky="ew", pady=(3, 0))
+        ttk.Button(pid_actions, text="填入默认参数", command=self.fill_default_motion_params).pack(
+            side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=175).grid(
-            row=5, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+            row=3, column=0, columnspan=6, sticky=tk.W, pady=(5, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
