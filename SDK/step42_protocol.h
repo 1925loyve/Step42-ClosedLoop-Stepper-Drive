@@ -131,6 +131,10 @@ typedef struct
     float speed_rpm;
     uint16_t raw_angle;
     float absolute_angle_deg;
+    float tracking_primary_error;
+    float tracking_secondary_feedback;
+    int16_t tracking_output;
+    uint8_t tracking_mode;
 } Step42_Telemetry;
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);

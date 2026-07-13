@@ -182,7 +182,7 @@ void Step42Comms_SendQuery(uint8_t seq)
 
 static void Step42Comms_SendTelemetry(void)
 {
-  uint8_t resp[16];
+  uint8_t resp[27];
   uint16_t angle_cdeg = (uint16_t)(Step42Control_GetAngleDeg() * 100.0f + 0.5f);
 
   if (angle_cdeg >= 36000U)
@@ -199,6 +199,13 @@ static void Step42Comms_SendTelemetry(void)
   Step42Slave_WriteI16(resp, 12U,
                        Ctrl_ClampI16(Step42Control_GetSpeedRpm() * 10.0f));
   Step42Slave_WriteU16(resp, 14U, Step42Control_GetRawAngle());
+  Ctrl_WriteI32(resp, 16U,
+                Ctrl_ClampI32(Step42Tracking_GetPrimaryError() * 100.0f));
+  Ctrl_WriteI32(resp, 20U,
+                Ctrl_ClampI32(Step42Tracking_GetSecondaryFeedback() * 100.0f));
+  Step42Slave_WriteI16(resp, 24U,
+                       Ctrl_ClampI16(Step42Tracking_GetOutput()));
+  resp[26] = Step42Control_GetTrackingConfig()->mode;
   Ctrl_SendFrame(CTRL_CMD_STREAM, 0U, resp, sizeof(resp));
 }
 
@@ -640,7 +647,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
   if (cmd == CTRL_CMD_TRACK_INPUT)
   {
-    if (len != 4U)
+    if ((len != 4U) && (len != 8U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
@@ -650,8 +657,24 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
       return;
     }
-    Step42Control_SetTrackingInput(((float)Step42Slave_ReadI16(payload)) / 100.0f,
-                                   ((float)Step42Slave_ReadI16(payload + 2U)) / 100.0f);
+    if (len == 8U)
+    {
+      int32_t primary = Ctrl_ReadI32(payload);
+      int32_t secondary = Ctrl_ReadI32(payload + 4U);
+      if ((primary < -100000) || (primary > 100000) ||
+          (secondary < -100000) || (secondary > 100000))
+      {
+        Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+        return;
+      }
+      Step42Control_SetTrackingInput(((float)primary) / 100.0f,
+                                     ((float)secondary) / 100.0f);
+    }
+    else
+    {
+      Step42Control_SetTrackingInput(((float)Step42Slave_ReadI16(payload)) / 100.0f,
+                                     ((float)Step42Slave_ReadI16(payload + 2U)) / 100.0f);
+    }
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }

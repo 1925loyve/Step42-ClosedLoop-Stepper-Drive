@@ -477,17 +477,17 @@ uint16_t Step42_BuildTrackPid(uint8_t *buf, uint16_t max_len, uint8_t seq,
 uint16_t Step42_BuildTrackInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                float primary_error, float secondary_feedback)
 {
-    uint8_t payload[4];
+    uint8_t payload[8];
     float primary_scaled = primary_error * 100.0f;
     float secondary_scaled = secondary_feedback * 100.0f;
 
-    if ((primary_scaled < -32768.0f) || (primary_scaled > 32767.0f) ||
-        (secondary_scaled < -32768.0f) || (secondary_scaled > 32767.0f))
+    if ((primary_scaled < -100000.0f) || (primary_scaled > 100000.0f) ||
+        (secondary_scaled < -100000.0f) || (secondary_scaled > 100000.0f))
     {
         return 0U;
     }
-    Step42_WriteI16(payload, 0U, (int16_t)primary_scaled);
-    Step42_WriteI16(payload, 2U, (int16_t)secondary_scaled);
+    Step42_WriteI32(payload, 0U, (int32_t)primary_scaled);
+    Step42_WriteI32(payload, 4U, (int32_t)secondary_scaled);
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_INPUT, seq,
                              payload, sizeof(payload));
 }
@@ -656,6 +656,10 @@ int Step42_DecodeStreamTelemetry(const Step42_Response *response,
     telemetry->speed_rpm = 0.0f;
     telemetry->raw_angle = 0U;
     telemetry->absolute_angle_deg = 0.0f;
+    telemetry->tracking_primary_error = 0.0f;
+    telemetry->tracking_secondary_feedback = 0.0f;
+    telemetry->tracking_output = 0;
+    telemetry->tracking_mode = 0U;
     if (response->len >= 16U)
     {
         telemetry->target_angle_deg =
@@ -668,6 +672,15 @@ int Step42_DecodeStreamTelemetry(const Step42_Response *response,
         telemetry->raw_angle = Step42_ReadU16(response->payload, 14U);
         telemetry->absolute_angle_deg =
             ((float)(telemetry->raw_angle & 0x3FFFU)) * 360.0f / 16384.0f;
+    }
+    if (response->len >= 27U)
+    {
+        telemetry->tracking_primary_error =
+            ((float)Step42_ReadI32(response->payload, 16U)) / 100.0f;
+        telemetry->tracking_secondary_feedback =
+            ((float)Step42_ReadI32(response->payload, 20U)) / 100.0f;
+        telemetry->tracking_output = Step42_ReadI16(response->payload, 24U);
+        telemetry->tracking_mode = response->payload[26U];
     }
     return 0;
 }

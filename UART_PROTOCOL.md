@@ -47,6 +47,7 @@ Status byte:
 | `0x07` | Query | none | complete current configuration and status |
 | `0x08` | Mode | `u8 mode` | `status` |
 | `0x09` | Stop | none | `status` |
+| `0x13` | Tracking error input | `i32 primary_centi, i32 secondary_centi`, each `-100000~100000` | `status` |
 
 Control modes:
 
@@ -56,6 +57,12 @@ Control modes:
 0x02 open-loop speed
 0x03 built-in error PID tracking
 ```
+
+Stream telemetry in protocol v4 is: `status, zero_angle_cdeg, target_cdeg(i32),
+position_error_cdeg(i32), position_pid_active, rpm_x10, raw_angle,
+tracking_primary_centi(i32), tracking_secondary_centi(i32), tracking_output(i16),
+tracking_mode`. The Error waveform uses target/error for multi-turn position;
+the Debug waveform uses the tracking primary error against a fixed zero target.
 
 Examples:
 
