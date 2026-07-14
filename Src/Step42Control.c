@@ -2,6 +2,7 @@
 #include "Step42SlaveProtocol.h"
 #include "Tmc2209.h"
 #include "led.h"
+#include "Key.h"
 #include "pid.h"
 #include "Step42Tracking.h"
 
@@ -924,17 +925,15 @@ void Step42Control_HandleKey(int8_t key_flag)
 {
   switch (key_flag)
   {
-  case 1:
-    if (motor_user_enabled != 0U)
+  case KEY_EVENT_HOME_SHORT:
+    if (zero_valid != 0U)
     {
-      weak_pid_target_deg = mt6701_unwrapped_deg + 360.0f;
-      PID_Reset(&weak_pid);
-      weak_pid_enable = 1U;
-      led_white_on;
+      (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
+      (void)Step42Control_Home(home_mode);
     }
     break;
 
-  case 2:
+  case KEY_EVENT_ENABLE_SHORT:
     Stepper_Stop(&Motor_42);
     if (motor_user_enabled == 0U)
     {
@@ -946,9 +945,41 @@ void Step42Control_HandleKey(int8_t key_flag)
     }
     break;
 
+  case KEY_EVENT_SET_ZERO_LONG:
+    Step42Control_StopMotion();
+    (void)Step42Control_SetCurrentZero();
+    break;
+
+  case KEY_EVENT_STOP_LONG:
+    Step42Control_StopMotion();
+    Step42Control_SetUserEnable(0U);
+    break;
+
   default:
     break;
   }
+}
+
+uint8_t Step42Control_IsMotionActive(void)
+{
+  if (motor_user_enabled == 0U)
+  {
+    return 0U;
+  }
+
+  if (Motor_42.state != STOP)
+  {
+    return 1U;
+  }
+
+  if ((control_mode == CTRL_MODE_CLOSED_POSITION) &&
+      (weak_pid_enable != 0U) &&
+      (AbsF(Step42Control_GetPositionErrorDeg()) > weak_pid.deadband))
+  {
+    return 1U;
+  }
+
+  return 0U;
 }
 
 uint8_t Step42Control_TimerTick1kHz(void)
