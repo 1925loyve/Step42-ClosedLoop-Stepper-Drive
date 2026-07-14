@@ -271,7 +271,7 @@ class AngleViewer(tk.Tk):
         self.title("Step42 闭环步进驱动控制中心")
         # This is deliberately a fixed desktop-tool layout so packaged EXEs
         # keep the same usable proportions on every production computer.
-        self.geometry("1600x900")
+        self.geometry("1600x980")
         self.resizable(False, False)
 
         self.frame_queue = queue.Queue()
@@ -702,23 +702,23 @@ class AngleViewer(tk.Tk):
 
         position_pid = ttk.LabelFrame(left, text="闭环位置参数", padding=7)
         position_pid.pack(fill=tk.X, pady=(8, 0))
-        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var), ("Kd", self.kd_var),
-                           ("限幅", self.limit_var), ("加速", self.closed_accel_var),
-                           ("死区", self.deadband_var))
+        position_fields = (("Kp", self.kp_var), ("Ki", self.ki_var),
+                           ("Kd", self.kd_var), ("限幅", self.limit_var),
+                           ("加速", self.closed_accel_var), ("死区", self.deadband_var))
         for index, (label, variable) in enumerate(position_fields):
-            row = index // 3
-            column = (index % 3) * 2
+            row = index // 2
+            column = (index % 2) * 2
             ttk.Label(position_pid, text=label).grid(
-                row=row, column=column, sticky=tk.W, padx=(0 if column == 0 else 5, 2), pady=2)
+                row=row, column=column, sticky=tk.W, padx=(0 if column == 0 else 7, 2), pady=2)
             ttk.Entry(position_pid, textvariable=variable, width=5).grid(
                 row=row, column=column + 1, sticky=tk.W, pady=2)
         pid_actions = ttk.Frame(position_pid)
-        pid_actions.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(5, 0))
+        pid_actions.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(5, 0))
         ttk.Button(pid_actions, text="应用运行参数", command=self.apply_position_params).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(pid_actions, text="填入默认参数", command=self.fill_default_motion_params).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
-        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=175).grid(
-            row=3, column=0, columnspan=6, sticky=tk.W, pady=(5, 0))
+        ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=185).grid(
+            row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
@@ -871,14 +871,14 @@ class AngleViewer(tk.Tk):
         ttk.Label(wave_toolbar, textvariable=self.status_var).pack(side=tk.RIGHT)
         canvas_wrap = ttk.Frame(wave)
         canvas_wrap.pack(fill=tk.BOTH, expand=True)
-        self.wave_axis_canvas = tk.Canvas(canvas_wrap, width=66, height=190, bg="#f8fafc", highlightthickness=1,
+        self.wave_axis_canvas = tk.Canvas(canvas_wrap, width=66, height=240, bg="#f8fafc", highlightthickness=1,
                                           highlightbackground="#cbd5e1")
         self.wave_axis_canvas.grid(row=0, column=0, sticky="ns")
         graph_wrap = ttk.Frame(canvas_wrap)
         graph_wrap.grid(row=0, column=1, sticky="nsew")
         canvas_wrap.columnconfigure(1, weight=1)
         canvas_wrap.rowconfigure(0, weight=1)
-        self.wave_canvas = tk.Canvas(graph_wrap, height=190, bg="#f8fafc", highlightthickness=1, highlightbackground="#cbd5e1")
+        self.wave_canvas = tk.Canvas(graph_wrap, height=240, bg="#f8fafc", highlightthickness=1, highlightbackground="#cbd5e1")
         self.wave_canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.wave_scroll = ttk.Scrollbar(graph_wrap, orient=tk.HORIZONTAL, command=self._wave_xview)
         self.wave_scroll.pack(side=tk.BOTTOM, fill=tk.X)
@@ -1256,7 +1256,8 @@ class AngleViewer(tk.Tk):
         if show_status:
             self.pid_status_var.set(
                 f"PID：已填入 {microsteps} 细分默认 Kp={params['kp']:.2f}, Ki={params['ki']:.2f}, "
-                f"Kd={params['kd']:.2f}, Deadband={params['deadband']:.2f}"
+                f"Kd={params['kd']:.2f}, Limit={params['limit']}, "
+                f"Deadband={params['deadband']:.2f}, Accel={params['accel']}"
             )
             self.closed_accel_status_var.set(f"闭环加速度：已填入默认 {params['accel']}")
 
@@ -1324,7 +1325,11 @@ class AngleViewer(tk.Tk):
     def send_pid_values(self):
         payload = self._build_position_pid_payload()
         if payload is not None and self._send(CMD_PID, payload):
-            self.pid_status_var.set("PID：已应用运行参数")
+            self.pid_status_var.set(
+                f"PID：已发送 Kp={self.kp_var.get()}, Ki={self.ki_var.get()}, "
+                f"Kd={self.kd_var.get()}, Limit={self.limit_var.get()}, "
+                f"Deadband={self.deadband_var.get()}, Accel={self.closed_accel_var.get()}"
+            )
 
     def _build_position_pid_payload(self):
         try:
@@ -1368,7 +1373,10 @@ class AngleViewer(tk.Tk):
             self.pid_status_var.set("运行参数：闭环加速度范围为1~65535")
             return
         if self._send(CMD_PID, payload) and self._send(CMD_CLOSED_ACCEL, struct.pack("<H", accel)):
-            self.pid_status_var.set("运行参数：PID 与闭环加速度已应用；重启后恢复默认或已保存档案")
+            self.pid_status_var.set(
+                f"运行参数：Kp={self.kp_var.get()}, Ki={self.ki_var.get()}, Kd={self.kd_var.get()}, "
+                f"Limit={self.limit_var.get()}, Deadband={self.deadband_var.get()}, Accel={accel} 已应用"
+            )
 
     def send_speed_value(self):
         if self.current_mode != MODE_OPEN_SPEED:
@@ -1737,6 +1745,7 @@ class AngleViewer(tk.Tk):
                 self.microstep_status_var.set(f"细分：{text}")
             elif cmd == CMD_CLOSED_ACCEL:
                 self.closed_accel_status_var.set(f"闭环加速度：{text}")
+                self.pid_status_var.set(f"闭环加速度：{self.closed_accel_var.get()}，{text}")
             elif cmd == CMD_HOME_MODE:
                 self.home_status_var.set(f"回零模式：{text}")
             elif cmd == CMD_SET_ZERO:
@@ -1792,8 +1801,10 @@ class AngleViewer(tk.Tk):
             self.home_status_var.set(f"零点：{'已设置' if zero_valid else '未设置'}，回零模式：{home_text}")
         if pid_params is not None:
             kp, ki, kd, limit, deadband = pid_params
+            accel_text = str(closed_accel) if closed_accel is not None else "--"
             self.pid_status_var.set(
-                f"PID：当前 Kp={kp:.2f}, Ki={ki:.2f}, Kd={kd:.2f}, Limit={limit}, Deadband={deadband:.3f}"
+                f"PID：当前 Kp={kp:.2f}, Ki={ki:.2f}, Kd={kd:.2f}, Limit={limit}, "
+                f"Deadband={deadband:.3f}, Accel={accel_text}"
             )
         if extended is not None:
             board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state, multi_turn_angle, motion_profile = extended
