@@ -21,7 +21,7 @@ Response:
 5A A5 LEN CMD|80 SEQ PAYLOAD CRC8
 ```
 
-- `LEN`: payload byte count, maximum 64.
+- `LEN`: payload byte count, maximum 72.
 - `SEQ`: host sequence number. Increment it for every command and match it in
   the response.
 - Multi-byte integers are little-endian.
@@ -99,10 +99,17 @@ Modes `1` and `2` do not use a physical limit switch; they only select which
 direction to reach the next `0°` point in the current mechanical revolution.
 Mode `3` moves the continuous closed-position coordinate back to `0°`.
 
+Protocol v10 appends `multi_turn_angle_cdeg(i32)` to the Query response at
+bytes `62..65`, and to stream telemetry at bytes `27..30`. This is the real
+continuous encoder position accumulated by the firmware while it remains
+powered. It is independent of whether the position PID is active, so it must
+be used for plotting movement in speed mode or while the motor is disabled.
+
 Stream telemetry is: `status, zero_angle_cdeg, target_cdeg(i32),
 position_error_cdeg(i32), position_pid_active, rpm_x10, raw_angle,
 tracking_primary_centi(i32), tracking_secondary_centi(i32), tracking_output(i16),
-tracking_mode`. The Error waveform uses target/error for multi-turn position;
+tracking_mode, multi_turn_angle_cdeg(i32)`. The Error waveform uses the real
+multi-turn position;
 the Debug waveform uses the tracking primary error against a fixed zero target.
 
 Examples:

@@ -96,6 +96,7 @@ uint8_t Step42Control_GetHomeMode(void);
 uint8_t Step42Control_IsZeroValid(void);
 uint16_t Step42Control_GetRawAngle(void);
 float Step42Control_GetAngleDeg(void);
+float Step42Control_GetMultiTurnAngleDeg(void);
 float Step42Control_GetPidOutputSteps(void);
 float Step42Control_GetPositionTargetDeg(void);
 float Step42Control_GetPositionErrorDeg(void);

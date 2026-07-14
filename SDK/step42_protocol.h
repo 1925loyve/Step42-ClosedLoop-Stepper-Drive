@@ -11,7 +11,7 @@ extern "C" {
 #define STEP42_SOF2                 (0x5AU)
 #define STEP42_RESP_SOF1            (0x5AU)
 #define STEP42_RESP_SOF2            (0xA5U)
-#define STEP42_MAX_PAYLOAD          (64U)
+#define STEP42_MAX_PAYLOAD          (72U)
 #define STEP42_MAX_FRAME_SIZE       (STEP42_MAX_PAYLOAD + 6U)
 
 #define STEP42_CMD_PING             (0x01U)
@@ -138,6 +138,7 @@ typedef struct
     uint8_t chopper_mode;
     float position_target_deg;
     float position_error_deg;
+    float multi_turn_angle_deg;
     uint8_t position_pid_active;
     uint8_t response_interface;
     uint8_t program_mode;
@@ -149,6 +150,7 @@ typedef struct
 {
     uint8_t status;
     float current_angle_deg;
+    float multi_turn_angle_deg;
     float target_angle_deg;
     float position_error_deg;
     uint8_t position_pid_active;

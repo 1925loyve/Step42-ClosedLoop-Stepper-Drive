@@ -598,6 +598,7 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->pid_output = Step42_ReadI16(response->payload, 8U);
     status->position_target_deg = 0.0f;
     status->position_error_deg = 0.0f;
+    status->multi_turn_angle_deg = status->angle_deg;
     status->position_pid_active = 0U;
     status->response_interface = 0U;
     status->program_mode = 0U;
@@ -663,6 +664,11 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
         status->program_running = response->payload[60];
         status->program_count = response->payload[61];
     }
+    if (response->len >= 66U)
+    {
+        status->multi_turn_angle_deg =
+            ((float)Step42_ReadI32(response->payload, 62U)) / 100.0f;
+    }
     return 0;
 }
 
@@ -681,6 +687,7 @@ int Step42_DecodeStreamTelemetry(const Step42_Response *response,
     telemetry->status = response->payload[0];
     telemetry->current_angle_deg =
         ((float)Step42_ReadU16(response->payload, 1U)) / 100.0f;
+    telemetry->multi_turn_angle_deg = telemetry->current_angle_deg;
     telemetry->target_angle_deg = 0.0f;
     telemetry->position_error_deg = 0.0f;
     telemetry->position_pid_active = 0U;
@@ -712,6 +719,11 @@ int Step42_DecodeStreamTelemetry(const Step42_Response *response,
             ((float)Step42_ReadI32(response->payload, 20U)) / 100.0f;
         telemetry->tracking_output = Step42_ReadI16(response->payload, 24U);
         telemetry->tracking_mode = response->payload[26U];
+    }
+    if (response->len >= 31U)
+    {
+        telemetry->multi_turn_angle_deg =
+            ((float)Step42_ReadI32(response->payload, 27U)) / 100.0f;
     }
     return 0;
 }

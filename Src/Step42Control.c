@@ -1563,6 +1563,11 @@ float Step42Control_GetAngleDeg(void)
   return mt6701_angle_deg;
 }
 
+float Step42Control_GetMultiTurnAngleDeg(void)
+{
+  return mt6701_unwrapped_deg;
+}
+
 float Step42Control_GetPidOutputSteps(void)
 {
   return weak_pid_output_steps;

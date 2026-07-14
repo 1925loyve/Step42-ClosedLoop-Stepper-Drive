@@ -113,7 +113,7 @@ static int32_t Ctrl_ClampI32(float value)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[62];
+  uint8_t resp[66];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -183,12 +183,14 @@ void Step42Comms_SendQuery(uint8_t seq)
   resp[59] = Step42Control_IsProgramMode();
   resp[60] = Step42Control_IsProgramRunning();
   resp[61] = Step42Control_GetProgramCount();
+  Ctrl_WriteI32(resp, 62U,
+                Ctrl_ClampI32(Step42Control_GetMultiTurnAngleDeg() * 100.0f));
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
 static void Step42Comms_SendTelemetry(void)
 {
-  uint8_t resp[27];
+  uint8_t resp[31];
   uint16_t angle_cdeg = (uint16_t)(Step42Control_GetAngleDeg() * 100.0f + 0.5f);
 
   if (angle_cdeg >= 36000U)
@@ -212,6 +214,8 @@ static void Step42Comms_SendTelemetry(void)
   Step42Slave_WriteI16(resp, 24U,
                        Ctrl_ClampI16(Step42Tracking_GetOutput()));
   resp[26] = Step42Control_GetTrackingConfig()->mode;
+  Ctrl_WriteI32(resp, 27U,
+                Ctrl_ClampI32(Step42Control_GetMultiTurnAngleDeg() * 100.0f));
   Ctrl_SendFrame(CTRL_CMD_STREAM, 0U, resp, sizeof(resp));
 }
 

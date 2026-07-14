@@ -26,7 +26,7 @@ WAVEFORM_PIXELS_PER_SECOND = 18
 
 REQ_SOF = b"\xA5\x5A"
 RESP_SOF = b"\x5A\xA5"
-MAX_PAYLOAD = 64
+MAX_PAYLOAD = 72
 
 CMD_PING = 0x01
 CMD_ENABLE = 0x02
@@ -284,6 +284,7 @@ class AngleViewer(tk.Tk):
         self.rpm_filtered = 0.0
         self.last_rpm_display_time = 0.0
         self.current_angle_deg = None
+        self.current_multi_turn_deg = None
         self.target_angle_deg = None
         self.position_error_deg = 0.0
         self.track_primary_error = 0.0
@@ -1578,6 +1579,10 @@ class AngleViewer(tk.Tk):
             self.current_angle_deg = current_cdeg / 100.0
             self.target_angle_deg = target_cdeg / 100.0
             self.position_error_deg = error_cdeg / 100.0
+            if len(payload) >= 31:
+                self.current_multi_turn_deg = struct.unpack("<i", payload[27:31])[0] / 100.0
+            else:
+                self.current_multi_turn_deg = self.target_angle_deg - self.position_error_deg
             if len(payload) >= 27:
                 self.track_primary_error, self.track_secondary_feedback = (
                     value / 100.0 for value in struct.unpack("<ii", payload[16:24])
@@ -1640,10 +1645,13 @@ class AngleViewer(tk.Tk):
                     error_cdeg = struct.unpack("<i", payload[53:57])[0]
                     position_state = (target_cdeg / 100.0, error_cdeg / 100.0,
                                       payload[57])
+                multi_turn_angle = None
+                if len(payload) >= 66:
+                    multi_turn_angle = struct.unpack("<i", payload[62:66])[0] / 100.0
                 extended = (board_mode, sensor_flags, temp_cdeg / 100.0, rpm_x10 / 10.0,
                             track_mode, track_freq, track_speed, track_accel,
                             primary_x100 / 100.0, secondary_x100 / 100.0,
-                            track_output, chopper_mode, position_state)
+                            track_output, chopper_mode, position_state, multi_turn_angle)
             if len(payload) >= 59 and payload[58] in (0, 1):
                 detected_role = "Debug" if payload[58] else "Error"
                 if self.interface_role_var.get() != detected_role:
@@ -1770,7 +1778,7 @@ class AngleViewer(tk.Tk):
                 f"PID：当前 Kp={kp:.2f}, Ki={ki:.2f}, Kd={kd:.2f}, Limit={limit}, Deadband={deadband:.3f}"
             )
         if extended is not None:
-            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state = extended
+            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state, multi_turn_angle = extended
             self.board_mode_var.set(BOARD_MODE_NAMES.get(board_mode, f"未知{board_mode}"))
             if sensor_flags & 0x01:
                 suffix = " 关断" if sensor_flags & 0x04 else (" 警告" if sensor_flags & 0x02 else "")
@@ -1785,6 +1793,8 @@ class AngleViewer(tk.Tk):
             self.track_primary_error = primary
             self.track_secondary_feedback = secondary
             self.track_output = track_output
+            if multi_turn_angle is not None:
+                self.current_multi_turn_deg = multi_turn_angle
             if chopper_mode is not None:
                 chopper_name = CHOPPER_MODE_NAMES.get(chopper_mode, f"未知{chopper_mode}")
                 self.chopper_status_var.set(f"斩波模式：当前 {chopper_name}")
@@ -1847,6 +1857,7 @@ class AngleViewer(tk.Tk):
         self.abs_deg_var.set("--")
         self.deg_var.set("--")
         self.current_angle_deg = None
+        self.current_multi_turn_deg = None
         self.target_angle_deg = None
         self.position_error_deg = 0.0
         self.track_primary_error = 0.0
@@ -1894,12 +1905,15 @@ class AngleViewer(tk.Tk):
             current = self.track_primary_error
             target = 0.0
         else:
-            if self.target_angle_deg is None:
+            current = self.current_multi_turn_deg
+            if current is None and self.target_angle_deg is not None:
+                current = self.target_angle_deg - self.position_error_deg
+            if current is None:
                 return
-            target = self.target_angle_deg
-            # The device reports multi-turn target and error, so this remains
-            # correct even when the physical encoder itself is only 0~360 deg.
-            current = target - self.position_error_deg
+            if self.current_mode == MODE_CLOSED_POSITION and self.target_angle_deg is not None:
+                target = self.target_angle_deg
+            else:
+                target = current
 
         self.wave_history.append((now, current, target))
         while self.wave_history and (now - self.wave_history[0][0]) > WAVEFORM_HISTORY_SECONDS:
