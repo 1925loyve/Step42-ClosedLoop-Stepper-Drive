@@ -265,7 +265,8 @@ static uint8_t Ctrl_IsExternalRunCommand(uint8_t cmd)
 
 static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint8_t len)
 {
-  if ((Step42Control_IsProgramMode() != 0U) &&
+  if (((Step42Control_IsProgramMode() != 0U) ||
+       (Step42Control_IsProgramRunning() != 0U)) &&
       (Ctrl_IsExternalRunCommand(cmd) != 0U))
   {
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_DENIED);

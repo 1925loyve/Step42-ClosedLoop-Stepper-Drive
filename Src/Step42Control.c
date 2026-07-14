@@ -414,9 +414,10 @@ uint8_t Step42Control_GetProgramCount(void)
   return program_count;
 }
 
-uint8_t Step42Control_StartProgram(void)
+static uint8_t Program_Start(uint8_t require_program_mode)
 {
-  if ((program_mode == 0U) || (program_ready == 0U) ||
+  if (((require_program_mode != 0U) && (program_mode == 0U)) ||
+      (program_ready == 0U) ||
       (program_editing != 0U) || (program_count == 0U) ||
       (motor_user_enabled == 0U) || (thermal_lockout != 0U) || (stall_fault != 0U))
   {
@@ -428,6 +429,16 @@ uint8_t Step42Control_StartProgram(void)
   program_step_started = 0U;
   program_running = 1U;
   return CTRL_STATUS_OK;
+}
+
+uint8_t Step42Control_StartProgram(void)
+{
+  return Program_Start(1U);
+}
+
+uint8_t Step42Control_StartOfflineProgram(void)
+{
+  return Program_Start(0U);
 }
 
 static void Program_Advance(void)
@@ -1320,9 +1331,9 @@ void Step42Control_HandleKey(int8_t key_flag)
     break;
 
   case KEY_EVENT_PROGRAM_LONG:
-    if ((motor_user_enabled != 0U) && (program_mode != 0U))
+    if (motor_user_enabled != 0U)
     {
-      (void)Step42Control_StartProgram();
+      (void)Step42Control_StartOfflineProgram();
     }
     break;
 

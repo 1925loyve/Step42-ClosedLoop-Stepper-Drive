@@ -60,6 +60,7 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
 uint8_t Step42Control_StageProgram(uint8_t count);
 uint8_t Step42Control_SaveProgram(uint8_t count);
 uint8_t Step42Control_StartProgram(void);
+uint8_t Step42Control_StartOfflineProgram(void);
 void Step42Control_ProcessProgram(void);
 uint8_t Step42Control_IsProgramRunning(void);
 uint8_t Step42Control_GetProgramCount(void);

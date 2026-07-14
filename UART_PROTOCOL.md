@@ -88,6 +88,9 @@ Protocol v8 adds `0x1D Program stage`. Upload all `0x19 Program step` frames,
 then stage their count with `0x1D` to run the RAM copy repeatedly. `0x1A Save
 program` is accepted only after a successful stage and performs the one Flash
 erase/write operation. This keeps normal test runs away from Flash endurance.
+After power-up, with the motor enabled, a KEY1 long press starts the valid
+stored program without requiring program mode. While that offline program is
+running, external motion commands are still denied until it completes or stops.
 
 Stream telemetry is: `status, zero_angle_cdeg, target_cdeg(i32),
 position_error_cdeg(i32), position_pid_active, rpm_x10, raw_angle,
