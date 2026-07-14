@@ -655,7 +655,9 @@ class AngleViewer(tk.Tk):
         tracking = ttk.LabelFrame(root, text="内置误差 PID", padding=8)
         tracking.grid(row=1, column=2, sticky="nsew", padx=(0, 10), pady=(12, 0))
         sequence = ttk.LabelFrame(root, text="指令添加", padding=8)
-        sequence.grid(row=1, column=3, sticky="nsew", pady=(12, 0))
+        # Keep the sequence editor in its own vertical lane.  It spans the
+        # waveform row so a long command form cannot push the graph downward.
+        sequence.grid(row=1, column=3, rowspan=2, sticky="ns", pady=(12, 0))
 
         mode = ttk.LabelFrame(left, text="模式状态", padding=8)
         mode.pack(fill=tk.X)
@@ -843,7 +845,7 @@ class AngleViewer(tk.Tk):
 
         self.wave_frame = ttk.LabelFrame(root, text="多圈位置波形：目标 / 当前位置", padding=8)
         wave = self.wave_frame
-        wave.grid(row=2, column=0, columnspan=4, sticky="nsew", pady=(12, 0))
+        wave.grid(row=2, column=0, columnspan=3, sticky="nsew", padx=(0, 10), pady=(12, 0))
         wave_toolbar = ttk.Frame(wave)
         wave_toolbar.pack(fill=tk.X, pady=(0, 5))
         ttk.Checkbutton(wave_toolbar, text="暂停波形", variable=self.wave_paused_var).pack(side=tk.LEFT)
