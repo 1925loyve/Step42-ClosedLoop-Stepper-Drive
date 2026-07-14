@@ -63,6 +63,22 @@ typedef struct
   uint32_t crc;
 } Step42ProgramFlash_t;
 
+typedef struct
+{
+  uint8_t valid;
+  uint8_t mode;
+  uint8_t user_enabled;
+  uint8_t chopper_mode;
+  uint16_t microsteps;
+  uint8_t home_mode;
+  float kp;
+  float ki;
+  float kd;
+  float pid_limit;
+  float deadband;
+  float closed_accel;
+} Step42ProgramSnapshot_t;
+
 static const Step42DefaultParam_t default_params[] = {
     {1U, 5.63f, 0.01f, 0.0f, 2.56f, 94.0f},
     {2U, 11.25f, 0.01f, 0.0f, 1.28f, 188.0f},
@@ -114,6 +130,7 @@ static uint8_t program_count = 0U;
 static uint8_t program_ready = 0U;
 static uint8_t program_editing = 0U;
 static uint8_t program_save_armed = 0U;
+static Step42ProgramSnapshot_t program_snapshot;
 static uint8_t program_index = 0U;
 static uint8_t program_step_started = 0U;
 static uint32_t program_step_start_ms = 0U;
@@ -122,6 +139,8 @@ static Step42ProgramStep_t program_steps[STEP42_PROGRAM_MAX_STEPS];
 
 static uint32_t Program_CalcCrc(const Step42ProgramFlash_t *program);
 static void Program_Load(void);
+static void Program_CaptureRuntime(void);
+static void Program_RestoreRuntime(void);
 
 static float AbsF(float value)
 {
@@ -388,16 +407,64 @@ uint8_t Step42Control_SaveProgram(uint8_t count)
   return CTRL_STATUS_OK;
 }
 
+static void Program_CaptureRuntime(void)
+{
+  program_snapshot.valid = 1U;
+  program_snapshot.mode = control_mode;
+  program_snapshot.user_enabled = motor_user_enabled;
+  program_snapshot.chopper_mode = Tmc2209_GetChopperMode();
+  program_snapshot.microsteps = motor_microsteps;
+  program_snapshot.home_mode = home_mode;
+  program_snapshot.closed_accel = closed_position_accel;
+  Step42Control_GetPositionPID(&program_snapshot.kp,
+                               &program_snapshot.ki,
+                               &program_snapshot.kd,
+                               &program_snapshot.pid_limit,
+                               &program_snapshot.deadband);
+}
+
+static void Program_RestoreRuntime(void)
+{
+  Step42ProgramSnapshot_t snapshot = program_snapshot;
+
+  if (snapshot.valid == 0U)
+  {
+    Step42Control_StopMotion();
+    return;
+  }
+
+  Step42Control_StopMotion();
+  (void)Step42Control_SetMode(snapshot.mode);
+  if ((snapshot.mode != CTRL_MODE_TRACK_PID) &&
+      (motor_microsteps != snapshot.microsteps))
+  {
+    (void)Step42Control_SetMicrosteps(snapshot.microsteps);
+  }
+  (void)Tmc2209_SetChopperMode(snapshot.chopper_mode);
+  closed_position_accel = snapshot.closed_accel;
+  Step42Control_SetPositionPID(snapshot.kp, snapshot.ki, snapshot.kd,
+                                snapshot.pid_limit, snapshot.deadband);
+  home_mode = snapshot.home_mode;
+  Step42Control_SetUserEnable(snapshot.user_enabled);
+  program_snapshot.valid = 0U;
+}
+
 uint8_t Step42Control_SetProgramMode(uint8_t enable)
 {
   if (enable == 0U)
   {
-    program_mode = 0U;
     program_running = 0U;
-    Step42Control_StopMotion();
+    Program_RestoreRuntime();
+    program_mode = 0U;
     return CTRL_STATUS_OK;
   }
 
+  if (program_mode != 0U)
+  {
+    return CTRL_STATUS_OK;
+  }
+
+  Program_CaptureRuntime();
   Step42Control_StopMotion();
   program_mode = 1U;
   return CTRL_STATUS_OK;
@@ -1150,6 +1217,12 @@ void Step42Control_StopMotion(void)
   led_white_off;
 }
 
+void Step42Control_AbortProgram(void)
+{
+  program_running = 0U;
+  Step42Control_StopMotion();
+}
+
 uint8_t Step42Control_SetClosedAccel(float accel)
 {
   if ((accel < 1.0f) || (accel > 65535.0f))
@@ -1358,7 +1431,7 @@ void Step42Control_HandleKey(int8_t key_flag)
     break;
 
   case KEY_EVENT_STOP_LONG:
-    Step42Control_StopMotion();
+    Step42Control_AbortProgram();
     Step42Control_SetUserEnable(0U);
     break;
 

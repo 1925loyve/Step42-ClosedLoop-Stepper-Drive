@@ -46,6 +46,7 @@ uint8_t Step42Control_MoveRelativeAngleByMode(float delta_angle);
 uint8_t Step42Control_MoveStepsByMode(int32_t steps, float speed, float accel);
 void Step42Control_RunSpeedByMode(float speed, float accel);
 void Step42Control_StopMotion(void);
+void Step42Control_AbortProgram(void);
 uint8_t Step42Control_SetMicrosteps(uint16_t microsteps);
 uint8_t Step42Control_SetClosedAccel(float accel);
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband);

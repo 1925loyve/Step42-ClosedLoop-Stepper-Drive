@@ -74,8 +74,9 @@ automatically; the host does not need to select an interface type manually.
 Protocol v7 further appends `program_mode`, `program_running`, and
 `program_count` to Query. While program mode is enabled, external motion
 commands (`angle`, `speed`, `relative angle`, `move steps`, `home`, mode change,
-and tracking error input) return `DENIED`; stop, telemetry and parameter writes
-remain available. The program executor itself may run position, open-step,
+tracking error input), parameter writes and drive settings return `DENIED`.
+Only telemetry/query, enable, stop and program-management commands remain
+available. The program executor itself may run position, open-step,
 speed, delay, home, tracking PID, microstep setup, chopper setup and stop steps
 without blocking the control loop. Program step `op` values are: `1` absolute
 position, `2` relative position, `3` open-loop steps, `4` speed, `5` delay,

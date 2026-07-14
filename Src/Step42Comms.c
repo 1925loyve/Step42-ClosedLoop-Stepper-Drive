@@ -263,10 +263,37 @@ static uint8_t Ctrl_IsExternalRunCommand(uint8_t cmd)
   }
 }
 
+static uint8_t Ctrl_IsProgramModeAllowed(uint8_t cmd)
+{
+  switch (cmd)
+  {
+  case CTRL_CMD_PING:
+  case CTRL_CMD_ENABLE:
+  case CTRL_CMD_STREAM:
+  case CTRL_CMD_QUERY:
+  case CTRL_CMD_STOP:
+  case CTRL_CMD_TRACK_QUERY:
+  case CTRL_CMD_PROGRAM_MODE:
+  case CTRL_CMD_PROGRAM_STEP:
+  case CTRL_CMD_PROGRAM_SAVE:
+  case CTRL_CMD_PROGRAM_RUN:
+  case CTRL_CMD_PROGRAM_QUERY:
+  case CTRL_CMD_PROGRAM_STAGE:
+    return 1U;
+  default:
+    return 0U;
+  }
+}
+
 static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint8_t len)
 {
-  if (((Step42Control_IsProgramMode() != 0U) ||
-       (Step42Control_IsProgramRunning() != 0U)) &&
+  if ((Step42Control_IsProgramMode() != 0U) &&
+      (Ctrl_IsProgramModeAllowed(cmd) == 0U))
+  {
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_DENIED);
+    return;
+  }
+  if ((Step42Control_IsProgramRunning() != 0U) &&
       (Ctrl_IsExternalRunCommand(cmd) != 0U))
   {
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_DENIED);
@@ -508,7 +535,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       return;
     }
 
-    Step42Control_StopMotion();
+    Step42Control_AbortProgram();
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
