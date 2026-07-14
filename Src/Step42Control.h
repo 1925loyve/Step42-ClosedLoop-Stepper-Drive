@@ -13,6 +13,27 @@ extern "C" {
 
 extern Stepper_t Motor_42;
 
+#define STEP42_PROGRAM_MAX_STEPS (8U)
+
+#define STEP42_PROGRAM_OP_POSITION_ABS (1U)
+#define STEP42_PROGRAM_OP_POSITION_REL (2U)
+#define STEP42_PROGRAM_OP_OPEN_STEPS   (3U)
+#define STEP42_PROGRAM_OP_SPEED        (4U)
+#define STEP42_PROGRAM_OP_DELAY        (5U)
+#define STEP42_PROGRAM_OP_HOME         (6U)
+#define STEP42_PROGRAM_OP_TRACK        (7U)
+#define STEP42_PROGRAM_OP_STOP         (8U)
+
+typedef struct
+{
+  uint8_t op;
+  uint8_t flags;
+  uint16_t speed;
+  uint16_t accel;
+  uint16_t duration_ms;
+  int32_t value;
+} Step42ProgramStep_t;
+
 void Step42Control_Init(void);
 void Step42Control_SetUserEnable(uint8_t enable);
 uint8_t Step42Control_SetMode(uint8_t mode);
@@ -29,6 +50,16 @@ uint8_t Step42Control_SetHomeMode(uint8_t mode);
 uint8_t Step42Control_SetCurrentZero(void);
 uint8_t Step42Control_Home(uint8_t mode);
 void Step42Control_HandleKey(int8_t key_flag);
+uint8_t Step42Control_SetProgramMode(uint8_t enable);
+uint8_t Step42Control_IsProgramMode(void);
+uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *step);
+uint8_t Step42Control_SaveProgram(uint8_t count);
+uint8_t Step42Control_StartProgram(void);
+void Step42Control_ProcessProgram(void);
+uint8_t Step42Control_IsProgramRunning(void);
+uint8_t Step42Control_GetProgramCount(void);
+void Step42Control_MarkExternalTask(void);
+uint8_t Step42Control_IsExternalTaskActive(void);
 uint8_t Step42Control_TimerTick1kHz(void);
 uint8_t Step42Control_SetTrackingBasic(uint8_t mode,
                                        uint8_t speed_percent,
@@ -49,6 +80,8 @@ void Step42Control_ResetTrackingDefaults(void);
 void Step42Control_SetThermalLockout(uint8_t lockout);
 
 uint8_t Step42Control_IsUserEnabled(void);
+uint8_t Step42Control_IsMotionActive(void);
+uint8_t Step42Control_IsStallFault(void);
 uint8_t Step42Control_GetMode(void);
 uint16_t Step42Control_GetMicrosteps(void);
 float Step42Control_GetClosedAccel(void);

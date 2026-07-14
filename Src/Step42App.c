@@ -12,6 +12,53 @@
 
 extern TIM_HandleTypeDef htim6;
 
+static uint8_t tmc2209_ready = 0U;
+
+static void Step42App_UpdateIndicators(void)
+{
+  uint32_t now = HAL_GetTick();
+  uint8_t temp_flags = Step42Sensors_GetFlags();
+  uint8_t fault = (uint8_t)((tmc2209_ready == 0U) ||
+                            (Step42Control_GetEncoderStatus() != MT6701_OK));
+
+  /* White is deliberately only an MCU heartbeat. */
+  (void)HAL_GPIO_WritePin(LED_WHITE_GPIO_Port, LED_WHITE_Pin,
+                          ((now % 1000U) < 90U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+
+  if ((temp_flags & STEP42_SENSOR_TEMP_SHUTDOWN) != 0U)
+  {
+    led_red_on;
+  }
+  else if ((Step42Control_IsStallFault() != 0U) || (fault != 0U))
+  {
+    (void)HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin,
+                            ((now % 200U) < 100U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  }
+  else if ((temp_flags & STEP42_SENSOR_TEMP_WARNING) != 0U)
+  {
+    (void)HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin,
+                            ((now % 500U) < 250U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  }
+  else
+  {
+    led_red_off;
+  }
+
+  if (Step42Control_IsProgramRunning() != 0U)
+  {
+    led_blue_on;
+  }
+  else if (Step42Control_IsExternalTaskActive() != 0U)
+  {
+    (void)HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin,
+                            ((now % 800U) < 180U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  }
+  else
+  {
+    led_blue_off;
+  }
+}
+
 void Step42App_Init(void)
 {
   uint8_t tmc_addr = 0xFFU;
@@ -28,15 +75,12 @@ void Step42App_Init(void)
 
   if (Tmc2209_InitAuto(&tmc_addr) != 0U)
   {
-    led_blue_on;
-  }
-  else
-  {
-    led_red_on;
+    tmc2209_ready = 1U;
   }
 
   Step42Control_Init();
   Step42PwmInput_Init();
+  Step42App_UpdateIndicators();
   HAL_TIM_Base_Start_IT(&htim6);
 }
 
@@ -52,8 +96,10 @@ void Step42App_Loop(void)
       (Step42Sensors_GetFlags() & STEP42_SENSOR_TEMP_SHUTDOWN) != 0U);
   Step42Comms_ProcessRx();
   Step42PwmInput_Process();
+  Step42Control_ProcessProgram();
   Step42Comms_SendStreamQueryIfDue();
   Step42Control_HandleKey(Key_Scan());
+  Step42App_UpdateIndicators();
 }
 
 void Step42App_TIMPeriodElapsedCallback(TIM_HandleTypeDef *htim)

@@ -54,6 +54,18 @@ void Step42PwmInput_Process(void)
     uint32_t pulse;
     float angle;
 
+    if (Step42Control_IsProgramMode() != 0U)
+    {
+        if (pwm_started != 0U)
+        {
+            HAL_TIM_IC_Stop_IT(&htim2, TIM_CHANNEL_1);
+            HAL_TIM_IC_Stop_IT(&htim2, TIM_CHANNEL_2);
+            pwm_started = 0U;
+        }
+        capture_pending = 0U;
+        return;
+    }
+
     if (Step42BoardMode_Get() == STEP42_BOARD_PWM)
     {
         if (pwm_started == 0U)
@@ -105,6 +117,7 @@ void Step42PwmInput_Process(void)
                 (AbsF(angle - last_angle_deg) >= PWM_ANGLE_CHANGE_MIN_DEG))
             {
                 Step42Control_MoveToAngleByMode(angle);
+                Step42Control_MarkExternalTask();
                 last_angle_deg = angle;
             }
         }

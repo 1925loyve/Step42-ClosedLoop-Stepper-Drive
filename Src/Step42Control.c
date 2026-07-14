@@ -2,8 +2,10 @@
 #include "Step42SlaveProtocol.h"
 #include "Tmc2209.h"
 #include "led.h"
+#include "Key.h"
 #include "pid.h"
 #include "Step42Tracking.h"
+#include <string.h>
 
 #define WEAK_PID_OUTPUT_SIGN (1.0f)
 #define DEFAULT_CLOSED_ACCEL_STEPS (3000.0f)
@@ -15,6 +17,10 @@
 #define STEP42_CFG_VERSION (1UL)
 #define STEP42_CFG_ADDR (FLASH_BASE + FLASH_SIZE - FLASH_PAGE_SIZE)
 #define STEP42_CFG_FLASH_PAGE (FLASH_PAGE_NB - 1U)
+#define STEP42_PROGRAM_MAGIC (0x50473432UL)
+#define STEP42_PROGRAM_VERSION (1UL)
+#define STEP42_PROGRAM_CFG_ADDR (FLASH_BASE + FLASH_SIZE - (2UL * FLASH_PAGE_SIZE))
+#define STEP42_PROGRAM_FLASH_PAGE (FLASH_PAGE_NB - 2U)
 #define STEP42_FLASH_WRITE_GUARD_MS (2000UL)
 #define CONTROL_TIMER_TICK_HZ (1000000UL)
 #define SPEED_ESTIMATE_WINDOW_S (0.020f)
@@ -47,6 +53,15 @@ typedef struct
   uint32_t home_mode;
   uint32_t crc;
 } Step42FlashConfig_t;
+
+typedef struct
+{
+  uint32_t magic;
+  uint32_t version;
+  uint32_t count;
+  Step42ProgramStep_t steps[STEP42_PROGRAM_MAX_STEPS];
+  uint32_t crc;
+} Step42ProgramFlash_t;
 
 static const Step42DefaultParam_t default_params[] = {
     {1U, 5.63f, 0.01f, 0.0f, 2.56f, 94.0f},
@@ -90,6 +105,20 @@ static float speed_accum_delta_deg = 0.0f;
 static float speed_accum_time_s = 0.0f;
 static float motor_speed_rpm = 0.0f;
 static uint8_t thermal_lockout = 0U;
+static uint8_t stall_fault = 0U;
+static uint16_t stall_elapsed_ms = 0U;
+static uint8_t external_task_marked = 0U;
+static uint8_t program_mode = 0U;
+static uint8_t program_running = 0U;
+static uint8_t program_count = 0U;
+static uint8_t program_index = 0U;
+static uint8_t program_step_started = 0U;
+static uint32_t program_step_start_ms = 0U;
+static uint32_t program_last_flash_write_ms = 0U;
+static Step42ProgramStep_t program_steps[STEP42_PROGRAM_MAX_STEPS];
+
+static uint32_t Program_CalcCrc(const Step42ProgramFlash_t *program);
+static void Program_Load(void);
 
 static float AbsF(float value)
 {
@@ -122,6 +151,38 @@ static uint32_t Config_CalcCrc(const Step42FlashConfig_t *cfg)
   }
 
   return crc;
+}
+
+static uint32_t Program_CalcCrc(const Step42ProgramFlash_t *program)
+{
+  const uint32_t *words = (const uint32_t *)program;
+  uint32_t crc = 0x3C6EF372UL;
+  uint32_t count = (sizeof(Step42ProgramFlash_t) / sizeof(uint32_t)) - 1U;
+  uint32_t i;
+
+  for (i = 0U; i < count; i++)
+  {
+    crc ^= words[i] + 0x9E3779B9UL + (crc << 6) + (crc >> 2);
+  }
+  return crc;
+}
+
+static void Program_Load(void)
+{
+  const Step42ProgramFlash_t *stored =
+      (const Step42ProgramFlash_t *)STEP42_PROGRAM_CFG_ADDR;
+
+  program_count = 0U;
+  if ((stored->magic != STEP42_PROGRAM_MAGIC) ||
+      (stored->version != STEP42_PROGRAM_VERSION) ||
+      (stored->count > STEP42_PROGRAM_MAX_STEPS) ||
+      (stored->crc != Program_CalcCrc(stored)))
+  {
+    return;
+  }
+
+  program_count = (uint8_t)stored->count;
+  memcpy(program_steps, stored->steps, sizeof(program_steps));
 }
 
 static void Config_Load(void)
@@ -201,6 +262,222 @@ static uint8_t Config_Save(void)
   HAL_FLASH_Lock();
   last_flash_write_ms = HAL_GetTick();
   return CTRL_STATUS_OK;
+}
+
+uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *step)
+{
+  if ((step == 0) || (index >= STEP42_PROGRAM_MAX_STEPS) ||
+      (step->op < STEP42_PROGRAM_OP_POSITION_ABS) ||
+      (step->op > STEP42_PROGRAM_OP_STOP))
+  {
+    return CTRL_STATUS_RANGE;
+  }
+
+  if (program_running != 0U)
+  {
+    return CTRL_STATUS_BUSY;
+  }
+
+  program_steps[index] = *step;
+  return CTRL_STATUS_OK;
+}
+
+uint8_t Step42Control_SaveProgram(uint8_t count)
+{
+  union
+  {
+    Step42ProgramFlash_t program;
+    uint64_t words[sizeof(Step42ProgramFlash_t) / sizeof(uint64_t)];
+  } image;
+  FLASH_EraseInitTypeDef erase;
+  uint32_t page_error = 0U;
+  uint32_t address = STEP42_PROGRAM_CFG_ADDR;
+  uint32_t i;
+
+  if (count > STEP42_PROGRAM_MAX_STEPS)
+  {
+    return CTRL_STATUS_RANGE;
+  }
+  if ((program_last_flash_write_ms != 0U) &&
+      ((uint32_t)(HAL_GetTick() - program_last_flash_write_ms) < STEP42_FLASH_WRITE_GUARD_MS))
+  {
+    return CTRL_STATUS_BUSY;
+  }
+
+  image.program.magic = STEP42_PROGRAM_MAGIC;
+  image.program.version = STEP42_PROGRAM_VERSION;
+  image.program.count = count;
+  memcpy(image.program.steps, program_steps, sizeof(program_steps));
+  image.program.crc = Program_CalcCrc(&image.program);
+
+  Step42Control_StopMotion();
+  HAL_FLASH_Unlock();
+  erase.TypeErase = FLASH_TYPEERASE_PAGES;
+  erase.Banks = FLASH_BANK_1;
+  erase.Page = STEP42_PROGRAM_FLASH_PAGE;
+  erase.NbPages = 1U;
+  if (HAL_FLASHEx_Erase(&erase, &page_error) != HAL_OK)
+  {
+    HAL_FLASH_Lock();
+    return CTRL_STATUS_RANGE;
+  }
+
+  for (i = 0U; i < (sizeof(Step42ProgramFlash_t) / sizeof(uint64_t)); i++)
+  {
+    if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, address, image.words[i]) != HAL_OK)
+    {
+      HAL_FLASH_Lock();
+      return CTRL_STATUS_RANGE;
+    }
+    address += 8U;
+  }
+  HAL_FLASH_Lock();
+  program_count = count;
+  program_last_flash_write_ms = HAL_GetTick();
+  return CTRL_STATUS_OK;
+}
+
+uint8_t Step42Control_SetProgramMode(uint8_t enable)
+{
+  if (enable == 0U)
+  {
+    program_mode = 0U;
+    program_running = 0U;
+    Step42Control_StopMotion();
+    return CTRL_STATUS_OK;
+  }
+
+  Step42Control_StopMotion();
+  program_mode = 1U;
+  return CTRL_STATUS_OK;
+}
+
+uint8_t Step42Control_IsProgramMode(void)
+{
+  return program_mode;
+}
+
+uint8_t Step42Control_IsProgramRunning(void)
+{
+  return program_running;
+}
+
+uint8_t Step42Control_GetProgramCount(void)
+{
+  return program_count;
+}
+
+uint8_t Step42Control_StartProgram(void)
+{
+  if ((program_mode == 0U) || (program_count == 0U) ||
+      (motor_user_enabled == 0U) || (thermal_lockout != 0U) || (stall_fault != 0U))
+  {
+    return CTRL_STATUS_BAD_MODE;
+  }
+
+  Step42Control_StopMotion();
+  program_index = 0U;
+  program_step_started = 0U;
+  program_running = 1U;
+  return CTRL_STATUS_OK;
+}
+
+static void Program_Advance(void)
+{
+  program_index++;
+  program_step_started = 0U;
+  if (program_index >= program_count)
+  {
+    program_running = 0U;
+    Step42Control_StopMotion();
+  }
+}
+
+void Step42Control_ProcessProgram(void)
+{
+  Step42ProgramStep_t *step;
+  uint32_t elapsed;
+
+  if (program_running == 0U)
+  {
+    return;
+  }
+  if ((motor_user_enabled == 0U) || (thermal_lockout != 0U) || (stall_fault != 0U))
+  {
+    program_running = 0U;
+    Step42Control_StopMotion();
+    return;
+  }
+
+  step = &program_steps[program_index];
+  elapsed = (uint32_t)(HAL_GetTick() - program_step_start_ms);
+  if (program_step_started == 0U)
+  {
+    program_step_started = 1U;
+    program_step_start_ms = HAL_GetTick();
+    elapsed = 0U;
+
+    switch (step->op)
+    {
+    case STEP42_PROGRAM_OP_POSITION_ABS:
+      (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
+      (void)Step42Control_SetClosedAccel((float)step->accel);
+      Step42Control_MoveToAngleByMode(((float)step->value) / 100.0f);
+      break;
+    case STEP42_PROGRAM_OP_POSITION_REL:
+      (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
+      (void)Step42Control_SetClosedAccel((float)step->accel);
+      (void)Step42Control_MoveRelativeAngleByMode(((float)step->value) / 100.0f);
+      break;
+    case STEP42_PROGRAM_OP_OPEN_STEPS:
+      (void)Step42Control_SetMode(CTRL_MODE_OPEN_POSITION);
+      (void)Step42Control_MoveStepsByMode(step->value, (float)step->speed, (float)step->accel);
+      break;
+    case STEP42_PROGRAM_OP_SPEED:
+      (void)Step42Control_SetMode(CTRL_MODE_OPEN_SPEED);
+      Step42Control_RunSpeedByMode((float)step->value, (float)step->accel);
+      break;
+    case STEP42_PROGRAM_OP_HOME:
+      (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
+      (void)Step42Control_Home(step->flags);
+      break;
+    case STEP42_PROGRAM_OP_TRACK:
+      (void)Step42Control_SetMode(CTRL_MODE_TRACK_PID);
+      Step42Control_SetTrackingInput(((float)step->value) / 100.0f, 0.0f);
+      break;
+    case STEP42_PROGRAM_OP_STOP:
+      Step42Control_StopMotion();
+      break;
+    default:
+      break;
+    }
+  }
+
+  if (step->op == STEP42_PROGRAM_OP_DELAY)
+  {
+    if (elapsed >= step->duration_ms)
+    {
+      Program_Advance();
+    }
+  }
+  else if ((step->op == STEP42_PROGRAM_OP_SPEED) ||
+           (step->op == STEP42_PROGRAM_OP_TRACK))
+  {
+    if ((step->duration_ms != 0U) && (elapsed >= step->duration_ms))
+    {
+      Step42Control_StopMotion();
+      Program_Advance();
+    }
+  }
+  else if (step->op == STEP42_PROGRAM_OP_STOP)
+  {
+    Program_Advance();
+  }
+  else if ((step->op != STEP42_PROGRAM_OP_DELAY) &&
+           (Step42Control_IsMotionActive() == 0U))
+  {
+    Program_Advance();
+  }
 }
 
 static const Step42DefaultParam_t *DefaultParams_Find(uint16_t microsteps)
@@ -565,6 +842,7 @@ void Step42Control_Init(void)
 {
   Stepper_Init(&Motor_42, &htim1, TIM_CHANNEL_1, tmc_DIR_GPIO_Port, tmc_DIR_Pin, MODE_SPEED);
   Config_Load();
+  Program_Load();
   ApplyDefaultParams(motor_microsteps);
   Tmc2209_SetMicrosteps(motor_microsteps);
   PID_Init(&speed_pid, 0.25f, 1.0f, 0.0f, 0.001f, 1500.0f, 1000.0f, 5.0f);
@@ -576,6 +854,8 @@ void Step42Control_SetUserEnable(uint8_t enable)
 {
   if (enable != 0U)
   {
+    stall_fault = 0U;
+    stall_elapsed_ms = 0U;
     if (thermal_lockout != 0U)
     {
       Motor_DisableOutput();
@@ -583,6 +863,28 @@ void Step42Control_SetUserEnable(uint8_t enable)
       return;
     }
     Motor_EnableOutput();
+    /* Conservative encoder-based stall protection. DIAG is not routed on
+       this board, so only a sustained zero-speed condition is actionable. */
+    if ((motor_user_enabled != 0U) && (Motor_42.state != STOP) &&
+        ((AbsF(Motor_42.current_speed) * 60.0f / motor_steps_per_rev) >= 50.0f) &&
+        (AbsF(motor_speed_rpm) < 2.0f))
+    {
+      if (stall_elapsed_ms < 1000U)
+      {
+        stall_elapsed_ms++;
+      }
+      if (stall_elapsed_ms >= 350U)
+      {
+        stall_fault = 1U;
+        Step42Control_StopMotion();
+        Step42Control_SetUserEnable(0U);
+      }
+    }
+    else
+    {
+      stall_elapsed_ms = 0U;
+    }
+
     if (control_mode == CTRL_MODE_CLOSED_POSITION)
     {
       weak_pid_target_deg = mt6701_unwrapped_deg;
@@ -598,6 +900,7 @@ void Step42Control_SetUserEnable(uint8_t enable)
   }
   else
   {
+    program_running = 0U;
     Motor_DisableOutput();
     led_red_off;
     led_white_off;
@@ -747,6 +1050,7 @@ void Step42Control_StopMotion(void)
   closed_speed_target_steps = 0.0f;
   Stepper_ForceStopPosition(&Motor_42);
   Encoder_RebaseUnwrapped();
+  external_task_marked = 0U;
   led_white_off;
 }
 
@@ -924,17 +1228,15 @@ void Step42Control_HandleKey(int8_t key_flag)
 {
   switch (key_flag)
   {
-  case 1:
+  case KEY_EVENT_HOME_SHORT:
     if (motor_user_enabled != 0U)
     {
-      weak_pid_target_deg = mt6701_unwrapped_deg + 360.0f;
-      PID_Reset(&weak_pid);
-      weak_pid_enable = 1U;
-      led_white_on;
+      (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
+      (void)Step42Control_Home(home_mode);
     }
     break;
 
-  case 2:
+  case KEY_EVENT_ENABLE_SHORT:
     Stepper_Stop(&Motor_42);
     if (motor_user_enabled == 0U)
     {
@@ -946,9 +1248,57 @@ void Step42Control_HandleKey(int8_t key_flag)
     }
     break;
 
+  case KEY_EVENT_PROGRAM_LONG:
+    if ((motor_user_enabled != 0U) && (program_mode != 0U))
+    {
+      (void)Step42Control_StartProgram();
+    }
+    break;
+
+  case KEY_EVENT_STOP_LONG:
+    Step42Control_StopMotion();
+    Step42Control_SetUserEnable(0U);
+    break;
+
   default:
     break;
   }
+}
+
+uint8_t Step42Control_IsMotionActive(void)
+{
+  if (motor_user_enabled == 0U)
+  {
+    return 0U;
+  }
+  if (Motor_42.state != STOP)
+  {
+    return 1U;
+  }
+  if ((control_mode == CTRL_MODE_CLOSED_POSITION) &&
+      (weak_pid_enable != 0U) &&
+      (AbsF(Step42Control_GetPositionErrorDeg()) > weak_pid.deadband))
+  {
+    return 1U;
+  }
+  return 0U;
+}
+
+void Step42Control_MarkExternalTask(void)
+{
+  external_task_marked = 1U;
+}
+
+uint8_t Step42Control_IsExternalTaskActive(void)
+{
+  return ((external_task_marked != 0U) &&
+          (program_running == 0U) &&
+          (Step42Control_IsMotionActive() != 0U)) ? 1U : 0U;
+}
+
+uint8_t Step42Control_IsStallFault(void)
+{
+  return stall_fault;
 }
 
 uint8_t Step42Control_TimerTick1kHz(void)

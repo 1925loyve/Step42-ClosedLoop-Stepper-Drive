@@ -37,6 +37,11 @@ extern "C" {
 #define STEP42_CMD_TRACK_QUERY      (0x15U)
 #define STEP42_CMD_CHOPPER_MODE     (0x16U)
 #define STEP42_CMD_RELATIVE_ANGLE   (0x17U)
+#define STEP42_CMD_PROGRAM_MODE     (0x18U)
+#define STEP42_CMD_PROGRAM_STEP     (0x19U)
+#define STEP42_CMD_PROGRAM_SAVE     (0x1AU)
+#define STEP42_CMD_PROGRAM_RUN      (0x1BU)
+#define STEP42_CMD_PROGRAM_QUERY    (0x1CU)
 
 #define STEP42_STATUS_OK            (0x00U)
 #define STEP42_STATUS_BAD_LEN       (0x01U)
@@ -121,6 +126,9 @@ typedef struct
     float position_error_deg;
     uint8_t position_pid_active;
     uint8_t response_interface;
+    uint8_t program_mode;
+    uint8_t program_running;
+    uint8_t program_count;
 } Step42_Status;
 
 typedef struct

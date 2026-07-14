@@ -600,6 +600,9 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->position_error_deg = 0.0f;
     status->position_pid_active = 0U;
     status->response_interface = 0U;
+    status->program_mode = 0U;
+    status->program_running = 0U;
+    status->program_count = 0U;
     if (response->len >= 32U)
     {
         status->kp = ((float)Step42_ReadI32(response->payload, 10U)) / 100.0f;
@@ -653,6 +656,12 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     if (response->len >= 59U)
     {
         status->response_interface = response->payload[58];
+    }
+    if (response->len >= 62U)
+    {
+        status->program_mode = response->payload[59];
+        status->program_running = response->payload[60];
+        status->program_count = response->payload[61];
     }
     return 0;
 }

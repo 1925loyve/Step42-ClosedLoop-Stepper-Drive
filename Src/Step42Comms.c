@@ -113,7 +113,7 @@ static int32_t Ctrl_ClampI32(float value)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[59];
+  uint8_t resp[62];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -180,6 +180,9 @@ void Step42Comms_SendQuery(uint8_t seq)
                 Ctrl_ClampI32(Step42Control_GetPositionErrorDeg() * 100.0f));
   resp[57] = Step42Control_IsPositionPidActive();
   resp[58] = response_interface;
+  resp[59] = Step42Control_IsProgramMode();
+  resp[60] = Step42Control_IsProgramRunning();
+  resp[61] = Step42Control_GetProgramCount();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -243,8 +246,32 @@ static void Step42Comms_SendTrackingQuery(uint8_t seq)
   Ctrl_SendFrame(CTRL_CMD_TRACK_QUERY, seq, resp, sizeof(resp));
 }
 
+static uint8_t Ctrl_IsExternalRunCommand(uint8_t cmd)
+{
+  switch (cmd)
+  {
+  case CTRL_CMD_ANGLE:
+  case CTRL_CMD_SPEED:
+  case CTRL_CMD_RELATIVE_ANGLE:
+  case CTRL_CMD_MODE:
+  case CTRL_CMD_MOVE_STEPS:
+  case CTRL_CMD_HOME:
+  case CTRL_CMD_TRACK_INPUT:
+    return 1U;
+  default:
+    return 0U;
+  }
+}
+
 static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint8_t len)
 {
+  if ((Step42Control_IsProgramMode() != 0U) &&
+      (Ctrl_IsExternalRunCommand(cmd) != 0U))
+  {
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_DENIED);
+    return;
+  }
+
   if (cmd == CTRL_CMD_PING)
   {
     uint8_t resp[2];
@@ -307,6 +334,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
     target_angle = ((float)target_cdeg) / 100.0f;
     Step42Control_MoveToAngleByMode(target_angle);
+    Step42Control_MarkExternalTask();
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -336,6 +364,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     }
 
     Step42Control_RunSpeedByMode((float)speed, (float)accel);
+    Step42Control_MarkExternalTask();
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -363,6 +392,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       return;
     }
 
+    Step42Control_MarkExternalTask();
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -517,6 +547,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       return;
     }
 
+    Step42Control_MarkExternalTask();
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -611,6 +642,10 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
     mode = (len == 1U) ? payload[0] : 0xFFU;
     status = Step42Control_Home(mode);
+    if (status == CTRL_STATUS_OK)
+    {
+      Step42Control_MarkExternalTask();
+    }
     Ctrl_SendStatus(cmd, seq, status);
     return;
   }
@@ -705,6 +740,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       Step42Control_SetTrackingInput(((float)Step42Slave_ReadI16(payload)) / 100.0f,
                                      ((float)Step42Slave_ReadI16(payload + 2U)) / 100.0f);
     }
+    Step42Control_MarkExternalTask();
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
@@ -748,6 +784,75 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_PROGRAM_MODE)
+  {
+    if ((len != 1U) || (response_interface == 0U))
+    {
+      Ctrl_SendStatus(cmd, seq, (len != 1U) ? CTRL_STATUS_BAD_LEN : CTRL_STATUS_DENIED);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, Step42Control_SetProgramMode(payload[0]));
+    return;
+  }
+
+  if (cmd == CTRL_CMD_PROGRAM_STEP)
+  {
+    Step42ProgramStep_t step;
+
+    if ((len != 13U) || (response_interface == 0U))
+    {
+      Ctrl_SendStatus(cmd, seq, (len != 13U) ? CTRL_STATUS_BAD_LEN : CTRL_STATUS_DENIED);
+      return;
+    }
+    step.op = payload[1];
+    step.flags = payload[2];
+    step.speed = Step42Slave_ReadU16(payload + 3U);
+    step.accel = Step42Slave_ReadU16(payload + 5U);
+    step.duration_ms = Step42Slave_ReadU16(payload + 7U);
+    step.value = Ctrl_ReadI32(payload + 9U);
+    Ctrl_SendStatus(cmd, seq, Step42Control_SetProgramStep(payload[0], &step));
+    return;
+  }
+
+  if (cmd == CTRL_CMD_PROGRAM_SAVE)
+  {
+    if ((len != 1U) || (response_interface == 0U))
+    {
+      Ctrl_SendStatus(cmd, seq, (len != 1U) ? CTRL_STATUS_BAD_LEN : CTRL_STATUS_DENIED);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, Step42Control_SaveProgram(payload[0]));
+    return;
+  }
+
+  if (cmd == CTRL_CMD_PROGRAM_RUN)
+  {
+    if ((len != 0U) || (response_interface == 0U))
+    {
+      Ctrl_SendStatus(cmd, seq, (len != 0U) ? CTRL_STATUS_BAD_LEN : CTRL_STATUS_DENIED);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, Step42Control_StartProgram());
+    return;
+  }
+
+  if (cmd == CTRL_CMD_PROGRAM_QUERY)
+  {
+    uint8_t resp[4];
+
+    if (len != 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    resp[0] = CTRL_STATUS_OK;
+    resp[1] = Step42Control_IsProgramMode();
+    resp[2] = Step42Control_IsProgramRunning();
+    resp[3] = Step42Control_GetProgramCount();
+    Ctrl_SendFrame(cmd, seq, resp, sizeof(resp));
+    return;
+  }
+
   Ctrl_SendStatus(cmd, seq, CTRL_STATUS_UNKNOWN_CMD);
 }
 
@@ -769,6 +874,11 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_DEFAULT:
   case CTRL_CMD_TRACK_QUERY:
   case CTRL_CMD_CHOPPER_MODE:
+  case CTRL_CMD_PROGRAM_MODE:
+  case CTRL_CMD_PROGRAM_STEP:
+  case CTRL_CMD_PROGRAM_SAVE:
+  case CTRL_CMD_PROGRAM_RUN:
+  case CTRL_CMD_PROGRAM_QUERY:
     return 1U;
   default:
     return 0U;

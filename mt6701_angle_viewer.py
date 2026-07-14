@@ -51,6 +51,11 @@ CMD_TRACK_DEFAULT = 0x14
 CMD_TRACK_QUERY = 0x15
 CMD_CHOPPER_MODE = 0x16
 CMD_RELATIVE_ANGLE = 0x17
+CMD_PROGRAM_MODE = 0x18
+CMD_PROGRAM_STEP = 0x19
+CMD_PROGRAM_SAVE = 0x1A
+CMD_PROGRAM_RUN = 0x1B
+CMD_PROGRAM_QUERY = 0x1C
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -354,7 +359,7 @@ class AngleViewer(tk.Tk):
         self.sequence_type_var = tk.StringVar(value="位置移动")
         self.sequence_param_vars = {}
         self.sequence_param_frame = None
-        self.sequence_status_var = tk.StringVar(value="指令仅保存在电脑，暂未写入驱动板。")
+        self.sequence_status_var = tk.StringVar(value="指令列表仅保存在电脑，尚未写入驱动板。")
         self.sequence_steps = []
         self.sequence_tree = None
 
@@ -815,10 +820,22 @@ class AngleViewer(tk.Tk):
                               ("删除", self.remove_sequence_step),
                               ("清空", self.clear_sequence_steps)):
             ttk.Button(sequence_tools, text=text, command=command).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=1)
-        ttk.Button(sequence, text="保存 JSON", command=self.save_sequence).grid(row=5, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(sequence, text="载入 JSON", command=self.load_sequence).grid(row=6, column=0, sticky="ew", pady=(3, 0))
+        program_tools = ttk.Frame(sequence)
+        program_tools.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        ttk.Button(program_tools, text="写入驱动 Flash", command=self.write_program_to_flash).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        ttk.Button(program_tools, text="运行指令", command=self.run_program).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+        program_mode_tools = ttk.Frame(sequence)
+        program_mode_tools.grid(row=6, column=0, sticky="ew", pady=(3, 0))
+        ttk.Button(program_mode_tools, text="进入指令模式", command=lambda: self.set_program_mode(True)).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        ttk.Button(program_mode_tools, text="退出指令模式", command=lambda: self.set_program_mode(False)).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+        ttk.Button(sequence, text="保存 JSON", command=self.save_sequence).grid(row=7, column=0, sticky="ew", pady=(6, 0))
+        ttk.Button(sequence, text="载入 JSON", command=self.load_sequence).grid(row=8, column=0, sticky="ew", pady=(3, 0))
         ttk.Label(sequence, textvariable=self.sequence_status_var, wraplength=280).grid(
-            row=7, column=0, sticky=tk.W, pady=(7, 0))
+            row=9, column=0, sticky=tk.W, pady=(7, 0))
 
         self.wave_frame = ttk.LabelFrame(root, text="多圈位置波形：目标 / 当前位置", padding=8)
         wave = self.wave_frame
@@ -888,7 +905,8 @@ class AngleViewer(tk.Tk):
             "回零": (("mode", "回零方式", "就近回零", ("就近回零", "正向无限位", "负向无限位")),),
             "运行内置PID": (
                 ("pid_mode", "PID结构", "双环PID", ("单环PID", "双环PID")),
-                ("stop", "运行条件", "持续运行", ("持续运行", "直到误差进入死区")),
+                ("error", "内部测试误差", "0", None),
+                ("duration", "持续时间 ms", "无限", None),
             ),
             "停止电机": (),
         }
@@ -910,7 +928,8 @@ class AngleViewer(tk.Tk):
         if command_type == "回零":
             return params.get("mode", "就近回零")
         if command_type == "运行内置PID":
-            return f"运行 {params.get('pid_mode', '?')}，{params.get('stop', '?')}"
+            return (f"运行 {params.get('pid_mode', '?')}，误差 {params.get('error', '0')}，"
+                    f"持续 {params.get('duration', '无限')} ms")
         return "停止电机"
 
     def _refresh_sequence_tree(self, select_index=None):
@@ -962,6 +981,100 @@ class AngleViewer(tk.Tk):
         self.sequence_steps.clear()
         self._refresh_sequence_tree()
         self.sequence_status_var.set("已清空本机指令列表。")
+
+    @staticmethod
+    def _program_duration(value):
+        if str(value).strip() == "无限":
+            return 0
+        duration = int(float(value))
+        if not 0 <= duration <= 65535:
+            raise ValueError("持续时间必须为 0~65535 ms 或“无限”")
+        return duration
+
+    def _encode_program_step(self, index, step):
+        params = step.get("params", {})
+        command_type = step.get("type", "")
+        op = flags = speed = accel = duration = value = 0
+
+        if command_type == "位置移动":
+            angle = float(params["angle"])
+            speed = int(float(params["speed"]))
+            accel = int(float(params["accel"]))
+            if not (1 <= speed <= 65535 and 1 <= accel <= 65535):
+                raise ValueError("位置速度和加速度必须为 1~65535")
+            if params.get("control") == "开环脉冲":
+                microsteps = int(self.microstep_var.get())
+                value = int(round(angle * 200.0 * microsteps / 360.0))
+                if value == 0:
+                    raise ValueError("开环脉冲移动不能为 0")
+                op = 3
+            else:
+                value = int(round(angle * 100.0))
+                if not -720000 <= value <= 720000:
+                    raise ValueError("闭环位置范围为 -7200~7200 度")
+                op = 2 if params.get("reference") == "当前位置" else 1
+        elif command_type == "速度运行":
+            value = int(float(params["speed"]))
+            accel = int(float(params["accel"]))
+            duration = self._program_duration(params.get("duration", "无限"))
+            if not (-5000 <= value <= 5000 and accel > 0):
+                raise ValueError("速度范围为 -5000~5000，加速度必须大于 0")
+            op = 4
+        elif command_type == "延时":
+            duration = self._program_duration(params["duration"])
+            op = 5
+        elif command_type == "回零":
+            flags = {"就近回零": 0, "正向无限位": 1, "负向无限位": 2}.get(params.get("mode"), 0)
+            op = 6
+        elif command_type == "运行内置PID":
+            flags = 1 if params.get("pid_mode") == "双环PID" else 0
+            value = int(round(float(params.get("error", "0")) * 100.0))
+            duration = self._program_duration(params.get("duration", "无限"))
+            if not -100000 <= value <= 100000:
+                raise ValueError("内部测试误差范围为 -1000~1000")
+            op = 7
+        elif command_type == "停止电机":
+            op = 8
+        else:
+            raise ValueError("未知指令类型")
+
+        return struct.pack("<BBBHHHi", index, op, flags, speed, accel, duration, value)
+
+    def write_program_to_flash(self):
+        if self.interface_role_var.get() != "Debug":
+            self.sequence_status_var.set("写入 Flash 请连接 Debug UART；连接后会自动识别接口。")
+            return
+        if not self.sequence_steps:
+            self.sequence_status_var.set("请先添加至少一条指令。")
+            return
+        if len(self.sequence_steps) > 8:
+            self.sequence_status_var.set("驱动 Flash 最多保存 8 条指令。")
+            return
+        try:
+            payloads = [self._encode_program_step(index, step)
+                        for index, step in enumerate(self.sequence_steps)]
+        except (KeyError, ValueError) as error:
+            self.sequence_status_var.set(f"指令格式错误：{error}")
+            return
+
+        for payload in payloads:
+            self._send(CMD_PROGRAM_STEP, payload)
+        self._send(CMD_PROGRAM_SAVE, struct.pack("<B", len(payloads)))
+        self.sequence_status_var.set(f"正在写入 {len(payloads)} 条指令到驱动 Flash。")
+
+    def set_program_mode(self, enabled):
+        if self.interface_role_var.get() != "Debug":
+            self.sequence_status_var.set("指令模式只能通过 Debug UART 设置。")
+            return
+        if self._send(CMD_PROGRAM_MODE, struct.pack("<B", 1 if enabled else 0)):
+            self.sequence_status_var.set("正在进入指令模式。" if enabled else "正在退出指令模式。")
+
+    def run_program(self):
+        if self._send(CMD_PROGRAM_RUN):
+            self.sequence_status_var.set("已发送运行内部指令请求。")
+
+    def send_program_query(self):
+        self._send(CMD_PROGRAM_QUERY)
 
     def save_sequence(self):
         path = filedialog.asksaveasfilename(title="保存指令列表", defaultextension=".json",
@@ -1384,6 +1497,7 @@ class AngleViewer(tk.Tk):
             if kind == "connected":
                 self.after(100, self.send_query)
                 self.after(160, self.send_track_query)
+                self.after(220, self.send_program_query)
             if kind in ("closed", "error"):
                 self.connected_port = None
                 self.tx_queue.clear()
@@ -1484,6 +1598,12 @@ class AngleViewer(tk.Tk):
                 if self.interface_role_var.get() != detected_role:
                     self.interface_role_var.set(detected_role)
                 self.status_var.set(f"已自动识别接口：{detected_role}")
+            if len(payload) >= 62:
+                self.sequence_status_var.set(
+                    f"指令模式：{'开启' if payload[59] else '关闭'}，"
+                    f"{'运行中' if payload[60] else '未运行'}，"
+                    f"Flash 指令 {payload[61]} 条"
+                )
             self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0,
                                  pid_output, pid_params, microsteps, closed_accel,
                                  zero_valid, home_mode, extended)
@@ -1553,6 +1673,13 @@ class AngleViewer(tk.Tk):
                 self.track_status_var.set(f"误差PID：{text}")
             elif cmd == CMD_CHOPPER_MODE:
                 self.chopper_status_var.set(f"斩波模式：{text}")
+            elif cmd in (CMD_PROGRAM_MODE, CMD_PROGRAM_STEP, CMD_PROGRAM_SAVE, CMD_PROGRAM_RUN):
+                self.sequence_status_var.set(f"内部指令：{text}")
+            elif cmd == CMD_PROGRAM_QUERY and len(payload) >= 4:
+                self.sequence_status_var.set(
+                    f"指令模式：{'开启' if payload[1] else '关闭'}，"
+                    f"{'运行中' if payload[2] else '未运行'}，Flash 指令 {payload[3]} 条"
+                )
         if self.pending_tx is None and not self.tx_queue:
             self._send(CMD_QUERY)
 

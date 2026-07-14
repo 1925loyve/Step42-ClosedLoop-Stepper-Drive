@@ -51,6 +51,11 @@ Status byte:
 | `0x09` | Stop | none | `status` |
 | `0x13` | Tracking error input | `i32 primary_centi, i32 secondary_centi`, each `-100000~100000` | `status` |
 | `0x17` | Relative closed-loop angle | `i32 delta_cdeg`, range `-720000~720000`; resulting target must remain within `-7200°~7200°` | `status` |
+| `0x18` | Program mode | `u8 enable` | `status`; Debug UART only |
+| `0x19` | Program step | `u8 index, u8 op, u8 flags, u16 speed, u16 accel, u16 duration_ms, i32 value` | `status`; Debug UART only |
+| `0x1A` | Save program | `u8 count`, maximum 8 | `status`; commits staged steps to Flash, Debug UART only |
+| `0x1B` | Run program | none | `status`; Debug UART only, requires program mode and motor enabled |
+| `0x1C` | Program query | none | `status, program_mode, program_running, program_count` |
 
 Control modes:
 
@@ -64,6 +69,13 @@ Control modes:
 Protocol v6 appends `response_interface` to the Query response: `0=Error/USART2`,
 `1=Debug/USART3`. The upper computer uses it to choose its waveform meaning
 automatically; the host does not need to select an interface type manually.
+
+Protocol v7 further appends `program_mode`, `program_running`, and
+`program_count` to Query. While program mode is enabled, external motion
+commands (`angle`, `speed`, `relative angle`, `move steps`, `home`, mode change,
+and tracking error input) return `DENIED`; stop, telemetry and parameter writes
+remain available. The program executor itself may run position, open-step,
+speed, delay, home, tracking PID and stop steps without blocking the control loop.
 
 Stream telemetry is: `status, zero_angle_cdeg, target_cdeg(i32),
 position_error_cdeg(i32), position_pid_active, rpm_x10, raw_angle,
