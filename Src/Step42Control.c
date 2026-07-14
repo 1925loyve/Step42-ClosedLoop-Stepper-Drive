@@ -268,7 +268,19 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
 {
   if ((step == 0) || (index >= STEP42_PROGRAM_MAX_STEPS) ||
       (step->op < STEP42_PROGRAM_OP_POSITION_ABS) ||
-      (step->op > STEP42_PROGRAM_OP_STOP))
+      (step->op > STEP42_PROGRAM_OP_CHOPPER))
+  {
+    return CTRL_STATUS_RANGE;
+  }
+
+  if ((step->op == STEP42_PROGRAM_OP_MICROSTEP) &&
+      (step->value != 1) && (step->value != 2) && (step->value != 4) &&
+      (step->value != 8) && (step->value != 16) && (step->value != 32) &&
+      (step->value != 64) && (step->value != 128) && (step->value != 256))
+  {
+    return CTRL_STATUS_RANGE;
+  }
+  if ((step->op == STEP42_PROGRAM_OP_CHOPPER) && (step->flags > 1U))
   {
     return CTRL_STATUS_RANGE;
   }
@@ -448,6 +460,13 @@ void Step42Control_ProcessProgram(void)
     case STEP42_PROGRAM_OP_STOP:
       Step42Control_StopMotion();
       break;
+    case STEP42_PROGRAM_OP_MICROSTEP:
+      (void)Step42Control_SetMode(CTRL_MODE_OPEN_POSITION);
+      (void)Step42Control_SetMicrosteps((uint16_t)step->value);
+      break;
+    case STEP42_PROGRAM_OP_CHOPPER:
+      (void)Tmc2209_SetChopperMode(step->flags);
+      break;
     default:
       break;
     }
@@ -469,7 +488,9 @@ void Step42Control_ProcessProgram(void)
       Program_Advance();
     }
   }
-  else if (step->op == STEP42_PROGRAM_OP_STOP)
+  else if ((step->op == STEP42_PROGRAM_OP_STOP) ||
+           (step->op == STEP42_PROGRAM_OP_MICROSTEP) ||
+           (step->op == STEP42_PROGRAM_OP_CHOPPER))
   {
     Program_Advance();
   }

@@ -786,9 +786,9 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
   if (cmd == CTRL_CMD_PROGRAM_MODE)
   {
-    if ((len != 1U) || (response_interface == 0U))
+    if (len != 1U)
     {
-      Ctrl_SendStatus(cmd, seq, (len != 1U) ? CTRL_STATUS_BAD_LEN : CTRL_STATUS_DENIED);
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
     Ctrl_SendStatus(cmd, seq, Step42Control_SetProgramMode(payload[0]));
@@ -799,9 +799,9 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
   {
     Step42ProgramStep_t step;
 
-    if ((len != 13U) || (response_interface == 0U))
+    if (len != 13U)
     {
-      Ctrl_SendStatus(cmd, seq, (len != 13U) ? CTRL_STATUS_BAD_LEN : CTRL_STATUS_DENIED);
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
     step.op = payload[1];
@@ -816,9 +816,9 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
   if (cmd == CTRL_CMD_PROGRAM_SAVE)
   {
-    if ((len != 1U) || (response_interface == 0U))
+    if (len != 1U)
     {
-      Ctrl_SendStatus(cmd, seq, (len != 1U) ? CTRL_STATUS_BAD_LEN : CTRL_STATUS_DENIED);
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
     Ctrl_SendStatus(cmd, seq, Step42Control_SaveProgram(payload[0]));
@@ -827,9 +827,9 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
   if (cmd == CTRL_CMD_PROGRAM_RUN)
   {
-    if ((len != 0U) || (response_interface == 0U))
+    if (len != 0U)
     {
-      Ctrl_SendStatus(cmd, seq, (len != 0U) ? CTRL_STATUS_BAD_LEN : CTRL_STATUS_DENIED);
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
     Ctrl_SendStatus(cmd, seq, Step42Control_StartProgram());

@@ -21,9 +21,9 @@ static void Step42App_UpdateIndicators(void)
   uint8_t fault = (uint8_t)((tmc2209_ready == 0U) ||
                             (Step42Control_GetEncoderStatus() != MT6701_OK));
 
-  /* White is deliberately only an MCU heartbeat. */
+  /* HAL_GetTick is SysTick based; the indicator timing is fully nonblocking. */
   (void)HAL_GPIO_WritePin(LED_WHITE_GPIO_Port, LED_WHITE_Pin,
-                          ((now % 1000U) < 90U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                          ((now % 1000U) < 500U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
   if ((temp_flags & STEP42_SENSOR_TEMP_SHUTDOWN) != 0U)
   {
@@ -51,7 +51,7 @@ static void Step42App_UpdateIndicators(void)
   else if (Step42Control_IsExternalTaskActive() != 0U)
   {
     (void)HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin,
-                            ((now % 800U) < 180U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                            ((now % 1000U) < 500U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
   }
   else
   {

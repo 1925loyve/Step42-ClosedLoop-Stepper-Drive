@@ -23,6 +23,8 @@ extern Stepper_t Motor_42;
 #define STEP42_PROGRAM_OP_HOME         (6U)
 #define STEP42_PROGRAM_OP_TRACK        (7U)
 #define STEP42_PROGRAM_OP_STOP         (8U)
+#define STEP42_PROGRAM_OP_MICROSTEP    (9U)
+#define STEP42_PROGRAM_OP_CHOPPER      (10U)
 
 typedef struct
 {

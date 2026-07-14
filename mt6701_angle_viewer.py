@@ -796,7 +796,7 @@ class AngleViewer(tk.Tk):
         ttk.Label(tracking, textvariable=self.track_status_var, wraplength=300).pack(anchor=tk.W, pady=(7, 0))
 
         sequence.columnconfigure(0, weight=1)
-        command_values = ("位置移动", "速度运行", "延时", "回零", "运行内置PID", "停止电机")
+        command_values = ("位置移动", "速度运行", "延时", "回零", "设置细分", "设置斩波", "运行内置PID", "停止电机")
         command_box = ttk.Combobox(sequence, textvariable=self.sequence_type_var,
                                    values=command_values, state="readonly", width=20)
         command_box.grid(row=0, column=0, sticky="ew")
@@ -903,6 +903,8 @@ class AngleViewer(tk.Tk):
             ),
             "延时": (("duration", "延时 ms", "200", None),),
             "回零": (("mode", "回零方式", "就近回零", ("就近回零", "正向无限位", "负向无限位")),),
+            "设置细分": (("microsteps", "细分", "32", ("1", "2", "4", "8", "16", "32", "64", "128", "256")),),
+            "设置斩波": (("chopper", "斩波模式", "静音 StealthChop", ("静音 StealthChop", "力矩 SpreadCycle")),),
             "运行内置PID": (
                 ("pid_mode", "PID结构", "双环PID", ("单环PID", "双环PID")),
                 ("error", "内部测试误差", "0", None),
@@ -927,6 +929,10 @@ class AngleViewer(tk.Tk):
             return f"延时 {params.get('duration', '?')} ms"
         if command_type == "回零":
             return params.get("mode", "就近回零")
+        if command_type == "设置细分":
+            return f"设置细分 {params.get('microsteps', '?')}"
+        if command_type == "设置斩波":
+            return f"设置斩波 {params.get('chopper', '?')}"
         if command_type == "运行内置PID":
             return (f"运行 {params.get('pid_mode', '?')}，误差 {params.get('error', '0')}，"
                     f"持续 {params.get('duration', '无限')} ms")
@@ -1026,6 +1032,14 @@ class AngleViewer(tk.Tk):
         elif command_type == "回零":
             flags = {"就近回零": 0, "正向无限位": 1, "负向无限位": 2}.get(params.get("mode"), 0)
             op = 6
+        elif command_type == "设置细分":
+            value = int(params["microsteps"])
+            if value not in (1, 2, 4, 8, 16, 32, 64, 128, 256):
+                raise ValueError("细分仅支持 1~256 的 2 次幂")
+            op = 9
+        elif command_type == "设置斩波":
+            flags = 1 if params.get("chopper") == "力矩 SpreadCycle" else 0
+            op = 10
         elif command_type == "运行内置PID":
             flags = 1 if params.get("pid_mode") == "双环PID" else 0
             value = int(round(float(params.get("error", "0")) * 100.0))
@@ -1041,9 +1055,6 @@ class AngleViewer(tk.Tk):
         return struct.pack("<BBBHHHi", index, op, flags, speed, accel, duration, value)
 
     def write_program_to_flash(self):
-        if self.interface_role_var.get() != "Debug":
-            self.sequence_status_var.set("写入 Flash 请连接 Debug UART；连接后会自动识别接口。")
-            return
         if not self.sequence_steps:
             self.sequence_status_var.set("请先添加至少一条指令。")
             return
@@ -1063,9 +1074,6 @@ class AngleViewer(tk.Tk):
         self.sequence_status_var.set(f"正在写入 {len(payloads)} 条指令到驱动 Flash。")
 
     def set_program_mode(self, enabled):
-        if self.interface_role_var.get() != "Debug":
-            self.sequence_status_var.set("指令模式只能通过 Debug UART 设置。")
-            return
         if self._send(CMD_PROGRAM_MODE, struct.pack("<B", 1 if enabled else 0)):
             self.sequence_status_var.set("正在进入指令模式。" if enabled else "正在退出指令模式。")
 
