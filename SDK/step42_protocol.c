@@ -567,6 +567,20 @@ uint16_t Step42_BuildSetChopperMode(uint8_t *buf, uint16_t max_len,
                              payload, sizeof(payload));
 }
 
+uint16_t Step42_BuildSetMotionProfile(uint8_t *buf, uint16_t max_len,
+                                      uint8_t seq, uint8_t profile)
+{
+    uint8_t payload[1];
+
+    if (profile > STEP42_PROFILE_S_CURVE)
+    {
+        return 0U;
+    }
+    payload[0] = profile;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_MOTION_PROFILE, seq,
+                             payload, sizeof(payload));
+}
+
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status)
 {
     if ((response == 0) || (status == 0) || (response->len < 1U))
@@ -604,6 +618,7 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->program_mode = 0U;
     status->program_running = 0U;
     status->program_count = 0U;
+    status->motion_profile = STEP42_PROFILE_TRAPEZOID;
     if (response->len >= 32U)
     {
         status->kp = ((float)Step42_ReadI32(response->payload, 10U)) / 100.0f;
@@ -668,6 +683,10 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     {
         status->multi_turn_angle_deg =
             ((float)Step42_ReadI32(response->payload, 62U)) / 100.0f;
+    }
+    if (response->len >= 67U)
+    {
+        status->motion_profile = response->payload[66U];
     }
     return 0;
 }

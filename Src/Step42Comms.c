@@ -185,6 +185,7 @@ void Step42Comms_SendQuery(uint8_t seq)
   resp[61] = Step42Control_GetProgramCount();
   Ctrl_WriteI32(resp, 62U,
                 Ctrl_ClampI32(Step42Control_GetMultiTurnAngleDeg() * 100.0f));
+  resp[66] = Step42Control_GetMotionProfile();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -816,6 +817,22 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_MOTION_PROFILE)
+  {
+    if (len != 1U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (Step42Control_SetMotionProfile(payload[0]) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
   if (cmd == CTRL_CMD_PROGRAM_MODE)
   {
     if (len != 1U)
@@ -917,6 +934,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_DEFAULT:
   case CTRL_CMD_TRACK_QUERY:
   case CTRL_CMD_CHOPPER_MODE:
+  case CTRL_CMD_MOTION_PROFILE:
   case CTRL_CMD_PROGRAM_MODE:
   case CTRL_CMD_PROGRAM_STEP:
   case CTRL_CMD_PROGRAM_SAVE:

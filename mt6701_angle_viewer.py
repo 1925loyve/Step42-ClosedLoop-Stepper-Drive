@@ -57,6 +57,7 @@ CMD_PROGRAM_SAVE = 0x1A
 CMD_PROGRAM_RUN = 0x1B
 CMD_PROGRAM_QUERY = 0x1C
 CMD_PROGRAM_STAGE = 0x1D
+CMD_MOTION_PROFILE = 0x1E
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -93,6 +94,8 @@ TRACK_MODE_LABELS = {"单环PID": 1, "串级双环PID": 2}
 TRACK_MODE_NAMES = {value: key for key, value in TRACK_MODE_LABELS.items()}
 CHOPPER_MODE_LABELS = {"静音 StealthChop": 0, "力矩 SpreadCycle": 1}
 CHOPPER_MODE_NAMES = {value: key for key, value in CHOPPER_MODE_LABELS.items()}
+MOTION_PROFILE_LABELS = {"梯形加减速": 0, "S 曲线加减速": 1}
+MOTION_PROFILE_NAMES = {value: key for key, value in MOTION_PROFILE_LABELS.items()}
 
 HOME_MODE_LABELS = {
     "就近回零": 0,
@@ -339,6 +342,8 @@ class AngleViewer(tk.Tk):
         self.speed_status_var = tk.StringVar(value="速度：未发送")
         self.chopper_mode_var = tk.StringVar(value="静音 StealthChop")
         self.chopper_status_var = tk.StringVar(value="斩波模式：未知")
+        self.motion_profile_var = tk.StringVar(value="梯形加减速")
+        self.motion_profile_status_var = tk.StringVar(value="曲线：未知")
         self.track_mode_var = tk.StringVar(value="单环PID")
         self.track_speed_pct_var = tk.StringVar(value="100")
         self.track_accel_pct_var = tk.StringVar(value="100")
@@ -671,7 +676,8 @@ class AngleViewer(tk.Tk):
         mode.columnconfigure(1, weight=1)
         rows = (("模式", self.mode_var, list(MODE_LABELS.keys()), self.send_mode),
                 ("细分", self.microstep_var, ["1", "2", "4", "8", "16", "32", "64", "128", "256"], self.send_microstep),
-                ("斩波", self.chopper_mode_var, list(CHOPPER_MODE_LABELS.keys()), self.send_chopper_mode))
+                ("斩波", self.chopper_mode_var, list(CHOPPER_MODE_LABELS.keys()), self.send_chopper_mode),
+                ("曲线", self.motion_profile_var, list(MOTION_PROFILE_LABELS.keys()), self.send_motion_profile))
         for row, (label, variable, values, command) in enumerate(rows):
             ttk.Label(mode, text=label).grid(row=row, column=0, sticky=tk.W, pady=3)
             combo = ttk.Combobox(mode, textvariable=variable, values=values, state="readonly", width=6)
@@ -681,17 +687,17 @@ class AngleViewer(tk.Tk):
                 combo.bind("<<ComboboxSelected>>", self._on_microstep_selected)
             ttk.Button(mode, text="设置", command=command, width=5).grid(row=row, column=2, pady=3)
         action_row = ttk.Frame(mode)
-        action_row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(7, 4))
+        action_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(7, 4))
         ttk.Button(action_row, text="使能", command=lambda: self.send_enable(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(action_row, text="失能", command=lambda: self.send_enable(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
         ttk.Button(action_row, text="停止", command=self.send_stop).pack(side=tk.LEFT, fill=tk.X, expand=True)
         stream_row = ttk.Frame(mode)
-        stream_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 5))
+        stream_row.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(0, 5))
         ttk.Button(stream_row, text="数据流开启", command=lambda: self.send_stream(1)).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(stream_row, text="数据流关闭", command=lambda: self.send_stream(0)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
         for row, variable in enumerate((self.mode_status_var, self.microstep_status_var,
-                                        self.chopper_status_var, self.enable_status_var,
-                                        self.stream_status_var), start=5):
+                                        self.chopper_status_var, self.motion_profile_status_var,
+                                        self.enable_status_var, self.stream_status_var), start=6):
             ttk.Label(mode, textvariable=variable).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=1)
 
         position_pid = ttk.LabelFrame(left, text="闭环位置参数", padding=7)
@@ -1299,6 +1305,14 @@ class AngleViewer(tk.Tk):
         if self._send(CMD_CHOPPER_MODE, struct.pack("<B", mode)):
             self.chopper_status_var.set(f"斩波模式：已发送 {self.chopper_mode_var.get()}")
 
+    def send_motion_profile(self):
+        profile = MOTION_PROFILE_LABELS.get(self.motion_profile_var.get())
+        if profile is None:
+            self.motion_profile_status_var.set("曲线：选择无效")
+            return
+        if self._send(CMD_MOTION_PROFILE, struct.pack("<B", profile)):
+            self.motion_profile_status_var.set(f"曲线：已发送 {self.motion_profile_var.get()}")
+
     def send_query(self):
         self._send(CMD_QUERY)
 
@@ -1648,10 +1662,12 @@ class AngleViewer(tk.Tk):
                 multi_turn_angle = None
                 if len(payload) >= 66:
                     multi_turn_angle = struct.unpack("<i", payload[62:66])[0] / 100.0
+                motion_profile = payload[66] if len(payload) >= 67 else None
                 extended = (board_mode, sensor_flags, temp_cdeg / 100.0, rpm_x10 / 10.0,
                             track_mode, track_freq, track_speed, track_accel,
                             primary_x100 / 100.0, secondary_x100 / 100.0,
-                            track_output, chopper_mode, position_state, multi_turn_angle)
+                            track_output, chopper_mode, position_state, multi_turn_angle,
+                            motion_profile)
             if len(payload) >= 59 and payload[58] in (0, 1):
                 detected_role = "Debug" if payload[58] else "Error"
                 if self.interface_role_var.get() != detected_role:
@@ -1732,6 +1748,8 @@ class AngleViewer(tk.Tk):
                 self.track_status_var.set(f"误差PID：{text}")
             elif cmd == CMD_CHOPPER_MODE:
                 self.chopper_status_var.set(f"斩波模式：{text}")
+            elif cmd == CMD_MOTION_PROFILE:
+                self.motion_profile_status_var.set(f"曲线：{text}")
             elif cmd in (CMD_PROGRAM_MODE, CMD_PROGRAM_STEP, CMD_PROGRAM_STAGE,
                          CMD_PROGRAM_SAVE, CMD_PROGRAM_RUN):
                 self.sequence_status_var.set(f"内部指令：{text}")
@@ -1778,7 +1796,7 @@ class AngleViewer(tk.Tk):
                 f"PID：当前 Kp={kp:.2f}, Ki={ki:.2f}, Kd={kd:.2f}, Limit={limit}, Deadband={deadband:.3f}"
             )
         if extended is not None:
-            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state, multi_turn_angle = extended
+            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state, multi_turn_angle, motion_profile = extended
             self.board_mode_var.set(BOARD_MODE_NAMES.get(board_mode, f"未知{board_mode}"))
             if sensor_flags & 0x01:
                 suffix = " 关断" if sensor_flags & 0x04 else (" 警告" if sensor_flags & 0x02 else "")
@@ -1800,6 +1818,10 @@ class AngleViewer(tk.Tk):
                 self.chopper_status_var.set(f"斩波模式：当前 {chopper_name}")
             else:
                 chopper_name = "旧固件未知"
+            if motion_profile is not None:
+                motion_name = MOTION_PROFILE_NAMES.get(motion_profile, f"未知{motion_profile}")
+                self.motion_profile_var.set(motion_name)
+                self.motion_profile_status_var.set(f"曲线：当前 {motion_name}")
             self.driver_status_var.set(
                 f"实际驱动状态：{MODE_NAMES.get(mode, '未知')} | {self.current_microsteps}细分 | {chopper_name}"
             )

@@ -1,5 +1,103 @@
 #include "stepper.h"
 
+#define STEPPER_SCURVE_RAMP_TIME_S (0.030f)
+#define STEPPER_MIN_SPEED          (1.0f)
+
+static float Stepper_AbsF(float value)
+{
+	return (value >= 0.0f) ? value : -value;
+}
+
+static float Stepper_SignF(float value)
+{
+	return (value >= 0.0f) ? 1.0f : -1.0f;
+}
+
+static uint32_t Stepper_SpeedToDelay(const Stepper_t *stepper, float speed)
+{
+	uint32_t delay = (uint32_t)(stepper->timer_freq / Stepper_AbsF(speed));
+
+	if (delay < 100U)
+	{
+		delay = 100U;
+	}
+	else if (delay > 600000U)
+	{
+		delay = 600000U;
+	}
+	return delay;
+}
+
+/*
+ * S-curve speed planning is deliberately executed by TIM1, the owner of the
+ * STEP period. TIM6 may update target_speed through PID, but never writes TIM1
+ * timing registers or step_delay.
+ */
+static uint8_t Stepper_UpdateSCurveAtPulse(Stepper_t *stepper, uint32_t *new_delay)
+{
+	float target_speed = stepper->target_speed;
+	float delta_speed;
+	float desired_accel;
+	float accel_step;
+	float braking_speed;
+	float next_speed;
+	float dt;
+
+	if (Stepper_AbsF(target_speed) < STEPPER_MIN_SPEED)
+	{
+		Stepper_Stop(stepper);
+		return 0U;
+	}
+
+	dt = (float)stepper->step_delay / stepper->timer_freq;
+	delta_speed = target_speed - stepper->current_speed;
+	if (Stepper_AbsF(delta_speed) < 0.001f)
+	{
+		desired_accel = 0.0f;
+	}
+	else
+	{
+		braking_speed = (stepper->current_accel * stepper->current_accel) /
+		                 (2.0f * stepper->jerk);
+		if (((stepper->current_accel * delta_speed) > 0.0f) &&
+			(Stepper_AbsF(delta_speed) <= braking_speed))
+		{
+			desired_accel = 0.0f;
+		}
+		else
+		{
+			desired_accel = Stepper_SignF(delta_speed) * stepper->accel;
+		}
+	}
+
+	accel_step = stepper->jerk * dt;
+	if ((desired_accel - stepper->current_accel) > accel_step)
+	{
+		stepper->current_accel += accel_step;
+	}
+	else if ((stepper->current_accel - desired_accel) > accel_step)
+	{
+		stepper->current_accel -= accel_step;
+	}
+	else
+	{
+		stepper->current_accel = desired_accel;
+	}
+
+	next_speed = stepper->current_speed + stepper->current_accel * dt;
+	if (((delta_speed > 0.0f) && (next_speed >= target_speed)) ||
+		((delta_speed < 0.0f) && (next_speed <= target_speed)))
+	{
+		next_speed = target_speed;
+		stepper->current_accel = 0.0f;
+	}
+
+	stepper->current_speed = next_speed;
+	stepper->state = (Stepper_AbsF(target_speed - next_speed) < 0.001f) ? RUN : ACCEL;
+	*new_delay = Stepper_SpeedToDelay(stepper, next_speed);
+	return 1U;
+}
+
 // 1. 初始化函数
 void Stepper_Init(Stepper_t *stepper, TIM_HandleTypeDef *htim, uint32_t tim_channel,
 				  GPIO_TypeDef *dir_port, uint16_t dir_pin,Stepper_Mode_t mode)
@@ -13,12 +111,33 @@ void Stepper_Init(Stepper_t *stepper, TIM_HandleTypeDef *htim, uint32_t tim_chan
 	stepper->timer_freq = 1000000.0f;
 
 	stepper->state = STOP;
+	stepper->profile = STEPPER_PROFILE_TRAPEZOID;
 	stepper->current_pos = 0;
 
 	stepper->target_speed = 0.0f;
 	stepper->current_speed = 0.0f;
+	stepper->current_accel = 0.0f;
+	stepper->jerk = 1.0f;
 	stepper->accel = 1.0f;
 	stepper->decel = 1.0f;
+}
+
+void Stepper_SetMotionProfile(Stepper_t *stepper, Stepper_Profile_t profile)
+{
+	if ((stepper == 0) || (profile > STEPPER_PROFILE_S_CURVE))
+	{
+		return;
+	}
+	stepper->profile = profile;
+}
+
+Stepper_Profile_t Stepper_GetMotionProfile(const Stepper_t *stepper)
+{
+	if (stepper == 0)
+	{
+		return STEPPER_PROFILE_TRAPEZOID;
+	}
+	return stepper->profile;
 }
 
 void Stepper_EN(GPIO_TypeDef *en_port, uint16_t en_pin,Stepper_ENN FEN){
@@ -46,7 +165,13 @@ void Stepper_Set_Speed_Profile(Stepper_t *stepper, float speed, float accel)
 	}
 	else if (stepper->run_mode == MODE_SPEED)
 	{
-		if (speed > 0)
+		if ((stepper->state != STOP) &&
+			(stepper->current_speed * speed < 0.0f))
+		{
+			/* A direction change is always a clean stop then restart. */
+			Stepper_Stop(stepper);
+		}
+		if (speed > 0.0f)
 		{
 			stepper->direction = DIR_REVERSE;
 		}
@@ -57,7 +182,15 @@ void Stepper_Set_Speed_Profile(Stepper_t *stepper, float speed, float accel)
 		HAL_GPIO_WritePin(stepper->dir_port, stepper->dir_pin, (GPIO_PinState)stepper->direction);
 		stepper->accel = accel;
 		stepper->target_speed = speed;
-		stepper->min_delay = (uint32_t)(stepper->timer_freq / fabsf(speed));
+		stepper->jerk = accel / STEPPER_SCURVE_RAMP_TIME_S;
+		if (stepper->jerk < 1.0f)
+		{
+			stepper->jerk = 1.0f;
+		}
+		if (Stepper_AbsF(speed) >= STEPPER_MIN_SPEED)
+		{
+			stepper->min_delay = Stepper_SpeedToDelay(stepper, speed);
+		}
 	}
 }
 
@@ -138,6 +271,7 @@ void Stepper_Run_Speed(Stepper_t *stepper)
 	stepper->current_speed = (stepper->target_speed >= 0.0f) ?
 		(stepper->timer_freq / (float)stepper->step_delay) :
 		-(stepper->timer_freq / (float)stepper->step_delay);
+	stepper->current_accel = 0.0f;
 
 	__HAL_TIM_SET_AUTORELOAD(stepper->htim, stepper->step_delay);
 	__HAL_TIM_SET_COMPARE(stepper->htim, stepper->tim_channel, stepper->step_delay / 2);
@@ -173,7 +307,15 @@ void Stepper_TIM_IRQ_Handler(Stepper_t *stepper)
 
     uint32_t new_delay = stepper->step_delay;
 
-		if (stepper->run_mode == MODE_SPEED) {    
+		if (stepper->run_mode == MODE_SPEED) {
+			if (stepper->profile == STEPPER_PROFILE_S_CURVE)
+			{
+				if (Stepper_UpdateSCurveAtPulse(stepper, &new_delay) == 0U)
+				{
+					return;
+				}
+			}
+			else {
 				float target_speed_abs = fabsf(stepper->target_speed);
 				float current_speed_abs = fabsf(stepper->current_speed);
 				float dt = (float)stepper->step_delay / stepper->timer_freq;
@@ -209,6 +351,7 @@ void Stepper_TIM_IRQ_Handler(Stepper_t *stepper)
 				stepper->current_speed = (stepper->target_speed >= 0.0f) ?
 						current_speed_abs : -current_speed_abs;
 				new_delay = (uint32_t)(stepper->timer_freq / current_speed_abs);
+			}
 		}
     else if (stepper->run_mode == MODE_POSITION)
     {

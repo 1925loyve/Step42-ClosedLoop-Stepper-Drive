@@ -1234,6 +1234,19 @@ uint8_t Step42Control_SetClosedAccel(float accel)
   return 1U;
 }
 
+uint8_t Step42Control_SetMotionProfile(uint8_t profile)
+{
+  if (profile > (uint8_t)STEPPER_PROFILE_S_CURVE)
+  {
+    return 0U;
+  }
+
+  /* A profile change is configuration, never a live speed transition. */
+  Step42Control_StopMotion();
+  Stepper_SetMotionProfile(&Motor_42, (Stepper_Profile_t)profile);
+  return 1U;
+}
+
 uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
 {
   if (control_mode == CTRL_MODE_TRACK_PID)
@@ -1595,6 +1608,11 @@ uint8_t Step42Control_IsPositionPidActive(void)
 float Step42Control_GetClosedAccel(void)
 {
   return closed_position_accel;
+}
+
+uint8_t Step42Control_GetMotionProfile(void)
+{
+  return (uint8_t)Stepper_GetMotionProfile(&Motor_42);
 }
 
 float Step42Control_GetSpeedRpm(void)

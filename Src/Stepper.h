@@ -27,6 +27,11 @@ typedef enum {
     STOP, ACCEL, DECEL, RUN
 } Stepper_State_t;
 
+typedef enum {
+    STEPPER_PROFILE_TRAPEZOID = 0,
+    STEPPER_PROFILE_S_CURVE = 1
+} Stepper_Profile_t;
+
 typedef struct {
     // -- 硬件资源 --
     TIM_HandleTypeDef*  htim;
@@ -38,6 +43,7 @@ typedef struct {
     // -- 模式控制 --
     Stepper_Mode_t      run_mode;   //运行模式
 		Stepper_State_t     state;
+    Stepper_Profile_t   profile;
     float               accel;
     
 		// -- 位置模式专用变量 --
@@ -54,6 +60,8 @@ typedef struct {
     // -- 速度模式专用变量 (核心) --
     volatile float      target_speed;  // 目标速度 (带符号, steps/s)
     volatile float      current_speed; // 当前实时速度 (带符号, steps/s)
+    float               current_accel; // 当前加速度，S 曲线专用
+    float               jerk;          // 最大加速度变化率，S 曲线专用
     
     // -- 位置记录 --
     volatile int32_t    current_pos;
@@ -70,6 +78,8 @@ void Stepper_EN(GPIO_TypeDef *en_port, uint16_t en_pin,Stepper_ENN FEN);
 
 // 统一的配置函数 (在速度模式下，max_speed 即为目标速度)
 void Stepper_Set_Speed_Profile(Stepper_t *stepper, float speed, float accel);
+void Stepper_SetMotionProfile(Stepper_t *stepper, Stepper_Profile_t profile);
+Stepper_Profile_t Stepper_GetMotionProfile(const Stepper_t *stepper);
 
 // 位置模式移动
 void Stepper_Move(Stepper_t *stepper, int32_t relative_steps);
