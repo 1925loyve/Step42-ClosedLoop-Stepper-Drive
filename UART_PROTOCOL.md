@@ -1,6 +1,8 @@
 # UART Control Protocol
 
-USART2: 115200, 8 data bits, no parity, 1 stop bit.
+Error UART (USART2) and Debug UART (USART3): 115200, 8 data bits, no parity,
+1 stop bit. The upper computer identifies which one it is connected to from
+the first Query response.
 
 The firmware command interface uses this binary protocol only. The PC tuning
 tool and MCU/Linux SDK use the same frame format.
@@ -44,7 +46,7 @@ Status byte:
 | `0x04` | Open-loop speed | `i16 speed, u16 accel` | `status` |
 | `0x05` | PID | `i16 kp_x100, i16 ki_x100, i16 kd_x100, u16 limit, u16 dead_x1000` | `status` |
 | `0x06` | Stream | `u8 enable` | `status`; when enabled, `SEQ=0` telemetry is sent periodically |
-| `0x07` | Query | none | complete current configuration and status |
+| `0x07` | Query | none | complete current configuration and status, including response interface |
 | `0x08` | Mode | `u8 mode` | `status` |
 | `0x09` | Stop | none | `status` |
 | `0x13` | Tracking error input | `i32 primary_centi, i32 secondary_centi`, each `-100000~100000` | `status` |
@@ -59,7 +61,11 @@ Control modes:
 0x03 built-in error PID tracking
 ```
 
-Stream telemetry in protocol v4 is: `status, zero_angle_cdeg, target_cdeg(i32),
+Protocol v6 appends `response_interface` to the Query response: `0=Error/USART2`,
+`1=Debug/USART3`. The upper computer uses it to choose its waveform meaning
+automatically; the host does not need to select an interface type manually.
+
+Stream telemetry is: `status, zero_angle_cdeg, target_cdeg(i32),
 position_error_cdeg(i32), position_pid_active, rpm_x10, raw_angle,
 tracking_primary_centi(i32), tracking_secondary_centi(i32), tracking_output(i16),
 tracking_mode`. The Error waveform uses target/error for multi-turn position;

@@ -16,6 +16,8 @@ extern UART_HandleTypeDef huart3;
 static Step42Slave_Parser_t error_parser;
 static Step42Slave_Parser_t debug_parser;
 static UART_HandleTypeDef *response_uart = &huart2;
+/* 0: Error UART (USART2), 1: Debug UART (USART3). */
+static uint8_t response_interface = 0U;
 static UART_HandleTypeDef *stream_uart = &huart3;
 static uint8_t error_rx_buffer[CTRL_RX_BUFFER_SIZE];
 static uint8_t debug_rx_buffer[CTRL_RX_BUFFER_SIZE];
@@ -111,7 +113,7 @@ static int32_t Ctrl_ClampI32(float value)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[58];
+  uint8_t resp[59];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -177,6 +179,7 @@ void Step42Comms_SendQuery(uint8_t seq)
   Ctrl_WriteI32(resp, 53U,
                 Ctrl_ClampI32(Step42Control_GetPositionErrorDeg() * 100.0f));
   resp[57] = Step42Control_IsPositionPidActive();
+  resp[58] = response_interface;
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -772,12 +775,19 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   }
 }
 
-static void Ctrl_ProcessRxByte(Step42Slave_Parser_t *parser, uint8_t ch, uint8_t restricted)
+static void Ctrl_ProcessRxByte(Step42Slave_Parser_t *parser,
+                               uint8_t ch,
+                               UART_HandleTypeDef *huart,
+                               uint8_t restricted)
 {
   Step42Slave_Frame_t frame;
 
   if (Step42Slave_ProcessByte(parser, ch, &frame) != 0U)
   {
+    /* Bind a reply to the UART that completed this frame, not the last
+       receiver buffer scanned by the main loop. */
+    response_uart = huart;
+    response_interface = (huart == &huart3) ? 1U : 0U;
     if ((restricted != 0U) && (Ctrl_DebugCommandAllowed(frame.cmd) == 0U))
     {
       Ctrl_SendStatus(frame.cmd, frame.seq, CTRL_STATUS_DENIED);
@@ -809,13 +819,12 @@ static void Ctrl_ProcessBuffer(uint8_t *buffer,
                                UART_HandleTypeDef *huart,
                                uint8_t restricted)
 {
-  response_uart = huart;
   while (*tail != *head)
   {
     uint8_t value = buffer[*tail];
     *tail = (uint16_t)((*tail + 1U) & CTRL_RX_BUFFER_MASK);
     debug_rx_count++;
-    Ctrl_ProcessRxByte(parser, value, restricted);
+    Ctrl_ProcessRxByte(parser, value, huart, restricted);
   }
 }
 
@@ -840,6 +849,7 @@ void Step42Comms_Init(void)
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
   debug_stream_enable = 0U;
+  response_interface = 0U;
   stream_uart = &huart3;
   error_rx_head = error_rx_tail = 0U;
   debug_rx_head = debug_rx_tail = 0U;
@@ -851,6 +861,7 @@ void Step42Comms_OnBoardModeChanged(void)
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
   debug_stream_enable = 0U;
+  response_interface = 0U;
   stream_uart = &huart3;
   debug_tx_pause_until_ms = 0U;
   error_rx_head = error_rx_tail = 0U;

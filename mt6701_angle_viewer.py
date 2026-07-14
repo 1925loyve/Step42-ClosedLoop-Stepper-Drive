@@ -621,9 +621,10 @@ class AngleViewer(tk.Tk):
         self.port_combo.grid(row=0, column=1, padx=(4, 8))
         ttk.Label(connection, text="波特率").grid(row=0, column=2, sticky=tk.W)
         ttk.Entry(connection, textvariable=self.baud_var, width=9).grid(row=0, column=3, padx=(4, 8))
-        ttk.Combobox(connection, textvariable=self.interface_role_var,
-                     values=("Error", "Debug"), state="readonly", width=7).grid(row=0, column=4, padx=(0, 6))
-        ttk.Checkbutton(connection, text="自动连接", variable=self.auto_var).grid(row=0, column=5, sticky=tk.W)
+        ttk.Label(connection, text="接口").grid(row=0, column=4, sticky=tk.W)
+        ttk.Label(connection, textvariable=self.interface_role_var,
+                  width=7).grid(row=0, column=5, padx=(4, 6), sticky=tk.W)
+        ttk.Checkbutton(connection, text="自动连接", variable=self.auto_var).grid(row=0, column=6, sticky=tk.W)
         ttk.Button(connection, text="刷新", command=self.refresh_ports).grid(row=1, column=0, pady=(7, 0), sticky="ew")
         ttk.Button(connection, text="连接", command=self.connect_selected).grid(row=1, column=1, pady=(7, 0), sticky="ew")
         ttk.Button(connection, text="断开", command=self.disconnect).grid(row=1, column=2, pady=(7, 0), sticky="ew")
@@ -1478,6 +1479,11 @@ class AngleViewer(tk.Tk):
                             track_mode, track_freq, track_speed, track_accel,
                             primary_x100 / 100.0, secondary_x100 / 100.0,
                             track_output, chopper_mode, position_state)
+            if len(payload) >= 59 and payload[58] in (0, 1):
+                detected_role = "Debug" if payload[58] else "Error"
+                if self.interface_role_var.get() != detected_role:
+                    self.interface_role_var.set(detected_role)
+                self.status_var.set(f"已自动识别接口：{detected_role}")
             self._display_status(status, enabled, stream, mode, raw, angle_cdeg / 100.0,
                                  pid_output, pid_params, microsteps, closed_accel,
                                  zero_valid, home_mode, extended)

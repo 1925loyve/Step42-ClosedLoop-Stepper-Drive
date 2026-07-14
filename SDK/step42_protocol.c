@@ -599,6 +599,7 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->position_target_deg = 0.0f;
     status->position_error_deg = 0.0f;
     status->position_pid_active = 0U;
+    status->response_interface = 0U;
     if (response->len >= 32U)
     {
         status->kp = ((float)Step42_ReadI32(response->payload, 10U)) / 100.0f;
@@ -648,6 +649,10 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
         status->position_error_deg =
             ((float)Step42_ReadI32(response->payload, 53U)) / 100.0f;
         status->position_pid_active = response->payload[57];
+    }
+    if (response->len >= 59U)
+    {
+        status->response_interface = response->payload[58];
     }
     return 0;
 }

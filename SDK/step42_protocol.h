@@ -120,6 +120,7 @@ typedef struct
     float position_target_deg;
     float position_error_deg;
     uint8_t position_pid_active;
+    uint8_t response_interface;
 } Step42_Status;
 
 typedef struct
