@@ -56,6 +56,7 @@ CMD_PROGRAM_STEP = 0x19
 CMD_PROGRAM_SAVE = 0x1A
 CMD_PROGRAM_RUN = 0x1B
 CMD_PROGRAM_QUERY = 0x1C
+CMD_PROGRAM_STAGE = 0x1D
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -361,6 +362,7 @@ class AngleViewer(tk.Tk):
         self.sequence_param_frame = None
         self.sequence_status_var = tk.StringVar(value="指令列表仅保存在电脑，尚未写入驱动板。")
         self.sequence_steps = []
+        self.sequence_ram_count = None
         self.sequence_tree = None
 
         self._build_ui()
@@ -822,20 +824,22 @@ class AngleViewer(tk.Tk):
             ttk.Button(sequence_tools, text=text, command=command).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=1)
         program_tools = ttk.Frame(sequence)
         program_tools.grid(row=5, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(program_tools, text="写入驱动 Flash", command=self.write_program_to_flash).pack(
+        ttk.Button(program_tools, text="写入 RAM", command=self.write_program_to_ram).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
-        ttk.Button(program_tools, text="运行指令", command=self.run_program).pack(
+        ttk.Button(program_tools, text="烧写 Flash", command=self.write_program_to_flash).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+        ttk.Button(sequence, text="运行指令", command=self.run_program).grid(
+            row=6, column=0, sticky="ew", pady=(4, 0))
         program_mode_tools = ttk.Frame(sequence)
-        program_mode_tools.grid(row=6, column=0, sticky="ew", pady=(3, 0))
+        program_mode_tools.grid(row=7, column=0, sticky="ew", pady=(3, 0))
         ttk.Button(program_mode_tools, text="进入指令模式", command=lambda: self.set_program_mode(True)).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
         ttk.Button(program_mode_tools, text="退出指令模式", command=lambda: self.set_program_mode(False)).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
-        ttk.Button(sequence, text="保存 JSON", command=self.save_sequence).grid(row=7, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(sequence, text="载入 JSON", command=self.load_sequence).grid(row=8, column=0, sticky="ew", pady=(3, 0))
+        ttk.Button(sequence, text="保存 JSON", command=self.save_sequence).grid(row=8, column=0, sticky="ew", pady=(6, 0))
+        ttk.Button(sequence, text="载入 JSON", command=self.load_sequence).grid(row=9, column=0, sticky="ew", pady=(3, 0))
         ttk.Label(sequence, textvariable=self.sequence_status_var, wraplength=280).grid(
-            row=9, column=0, sticky=tk.W, pady=(7, 0))
+            row=10, column=0, sticky=tk.W, pady=(7, 0))
 
         self.wave_frame = ttk.LabelFrame(root, text="多圈位置波形：目标 / 当前位置", padding=8)
         wave = self.wave_frame
@@ -897,8 +901,9 @@ class AngleViewer(tk.Tk):
                 ("control", "控制方式", "闭环位置", ("闭环位置", "开环脉冲")),
             ),
             "速度运行": (
-                ("speed", "速度 脉冲/s", "2000", None),
-                ("accel", "加速度 脉冲/s²", "100", None),
+                ("speed", "目标速度", "4", None),
+                ("unit", "速度单位", "RPM", ("RPM", "脉冲/s")),
+                ("accel", "加速度 脉冲/s²", "3000", None),
                 ("duration", "持续时间 ms", "无限", None),
             ),
             "延时": (("duration", "延时 ms", "200", None),),
@@ -923,7 +928,7 @@ class AngleViewer(tk.Tk):
                     f"速度 {params.get('speed', '?')}，加速度 {params.get('accel', '?')}，"
                     f"{params.get('control', '闭环位置')}")
         if command_type == "速度运行":
-            return (f"速度 {params.get('speed', '?')}，加速度 {params.get('accel', '?')}，"
+            return (f"速度 {params.get('speed', '?')} {params.get('unit', '脉冲/s')}，加速度 {params.get('accel', '?')}，"
                     f"持续 {params.get('duration', '?')} ms")
         if command_type == "延时":
             return f"延时 {params.get('duration', '?')} ms"
@@ -959,6 +964,7 @@ class AngleViewer(tk.Tk):
             return
         step = {"type": command_type, "params": params}
         self.sequence_steps.append(step)
+        self.sequence_ram_count = None
         self._refresh_sequence_tree(len(self.sequence_steps) - 1)
         self.sequence_status_var.set(f"已添加第 {len(self.sequence_steps)} 条，仅保存在上位机。")
 
@@ -971,6 +977,7 @@ class AngleViewer(tk.Tk):
         if index is None:
             return
         self.sequence_steps.pop(index)
+        self.sequence_ram_count = None
         self._refresh_sequence_tree(min(index, len(self.sequence_steps) - 1))
 
     def move_sequence_step(self, delta):
@@ -981,10 +988,12 @@ class AngleViewer(tk.Tk):
         if destination < 0 or destination >= len(self.sequence_steps):
             return
         self.sequence_steps[index], self.sequence_steps[destination] = self.sequence_steps[destination], self.sequence_steps[index]
+        self.sequence_ram_count = None
         self._refresh_sequence_tree(destination)
 
     def clear_sequence_steps(self):
         self.sequence_steps.clear()
+        self.sequence_ram_count = None
         self._refresh_sequence_tree()
         self.sequence_status_var.set("已清空本机指令列表。")
 
@@ -997,7 +1006,7 @@ class AngleViewer(tk.Tk):
             raise ValueError("持续时间必须为 0~65535 ms 或“无限”")
         return duration
 
-    def _encode_program_step(self, index, step):
+    def _encode_program_step(self, index, step, active_microsteps=32):
         params = step.get("params", {})
         command_type = step.get("type", "")
         op = flags = speed = accel = duration = value = 0
@@ -1020,11 +1029,20 @@ class AngleViewer(tk.Tk):
                     raise ValueError("闭环位置范围为 -7200~7200 度")
                 op = 2 if params.get("reference") == "当前位置" else 1
         elif command_type == "速度运行":
-            value = int(float(params["speed"]))
+            requested_speed = float(params["speed"])
+            value = int(round(requested_speed))
             accel = int(float(params["accel"]))
             duration = self._program_duration(params.get("duration", "无限"))
-            if not (-5000 <= value <= 5000 and accel > 0):
-                raise ValueError("速度范围为 -5000~5000，加速度必须大于 0")
+            if not (-5000 <= value <= 5000 and 0 < accel <= 65535):
+                raise ValueError("速度范围为 -5000~5000，加速度为 1~65535")
+            if params.get("unit") == "RPM":
+                converted_speed = value * 200.0 * active_microsteps / 60.0
+                if abs(converted_speed) > 5000.0:
+                    max_rpm = 5000.0 * 60.0 / (200.0 * active_microsteps)
+                    raise ValueError(
+                        f"第 {index + 1} 条在 {active_microsteps} 细分下最大约 {max_rpm:.1f} RPM"
+                    )
+                flags = 0x01
             op = 4
         elif command_type == "延时":
             duration = self._program_duration(params["duration"])
@@ -1054,24 +1072,42 @@ class AngleViewer(tk.Tk):
 
         return struct.pack("<BBBHHHi", index, op, flags, speed, accel, duration, value)
 
-    def write_program_to_flash(self):
+    def _encode_sequence_payloads(self):
         if not self.sequence_steps:
             self.sequence_status_var.set("请先添加至少一条指令。")
-            return
+            return None
         if len(self.sequence_steps) > 8:
             self.sequence_status_var.set("驱动 Flash 最多保存 8 条指令。")
-            return
+            return None
         try:
-            payloads = [self._encode_program_step(index, step)
-                        for index, step in enumerate(self.sequence_steps)]
+            payloads = []
+            active_microsteps = self.current_microsteps if self.current_microsteps else 32
+            for index, step in enumerate(self.sequence_steps):
+                payloads.append(self._encode_program_step(index, step, active_microsteps))
+                if step.get("type") == "设置细分":
+                    active_microsteps = int(step.get("params", {}).get("microsteps", active_microsteps))
+            return payloads
         except (KeyError, ValueError) as error:
             self.sequence_status_var.set(f"指令格式错误：{error}")
+            return None
+
+    def write_program_to_ram(self):
+        payloads = self._encode_sequence_payloads()
+        if payloads is None:
             return
 
         for payload in payloads:
             self._send(CMD_PROGRAM_STEP, payload)
-        self._send(CMD_PROGRAM_SAVE, struct.pack("<B", len(payloads)))
-        self.sequence_status_var.set(f"正在写入 {len(payloads)} 条指令到驱动 Flash。")
+        if self._send(CMD_PROGRAM_STAGE, struct.pack("<B", len(payloads))):
+            self.sequence_ram_count = len(payloads)
+            self.sequence_status_var.set(f"已写入 {len(payloads)} 条指令到 RAM，可反复试跑；确认后再烧写 Flash。")
+
+    def write_program_to_flash(self):
+        if self.sequence_ram_count != len(self.sequence_steps):
+            self.sequence_status_var.set("请先点击“写入 RAM”，试跑确认后才能烧写 Flash。")
+            return
+        if self._send(CMD_PROGRAM_SAVE, struct.pack("<B", self.sequence_ram_count)):
+            self.sequence_status_var.set("正在烧写指令到 Flash；不要重复点击。")
 
     def set_program_mode(self, enabled):
         if self._send(CMD_PROGRAM_MODE, struct.pack("<B", 1 if enabled else 0)):
@@ -1114,6 +1150,7 @@ class AngleViewer(tk.Tk):
                         "type": step.get("type", "位置移动"),
                         "params": {"angle": step.get("primary", ""), "speed": step.get("secondary", "")},
                     })
+            self.sequence_ram_count = None
             self._refresh_sequence_tree()
             self.sequence_status_var.set(f"已载入 {len(self.sequence_steps)} 条本机指令。")
         except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -1681,12 +1718,13 @@ class AngleViewer(tk.Tk):
                 self.track_status_var.set(f"误差PID：{text}")
             elif cmd == CMD_CHOPPER_MODE:
                 self.chopper_status_var.set(f"斩波模式：{text}")
-            elif cmd in (CMD_PROGRAM_MODE, CMD_PROGRAM_STEP, CMD_PROGRAM_SAVE, CMD_PROGRAM_RUN):
+            elif cmd in (CMD_PROGRAM_MODE, CMD_PROGRAM_STEP, CMD_PROGRAM_STAGE,
+                         CMD_PROGRAM_SAVE, CMD_PROGRAM_RUN):
                 self.sequence_status_var.set(f"内部指令：{text}")
             elif cmd == CMD_PROGRAM_QUERY and len(payload) >= 4:
                 self.sequence_status_var.set(
                     f"指令模式：{'开启' if payload[1] else '关闭'}，"
-                    f"{'运行中' if payload[2] else '未运行'}，Flash 指令 {payload[3]} 条"
+                    f"{'运行中' if payload[2] else '未运行'}，当前指令 {payload[3]} 条"
                 )
         if self.pending_tx is None and not self.tx_queue:
             self._send(CMD_QUERY)

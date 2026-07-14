@@ -56,6 +56,7 @@ Status byte:
 | `0x1A` | Save program | `u8 count`, maximum 8 | `status`; commits staged steps to Flash through either UART |
 | `0x1B` | Run program | none | `status`; requires program mode and motor enabled |
 | `0x1C` | Program query | none | `status, program_mode, program_running, program_count` |
+| `0x1D` | Stage program in RAM | `u8 count`, maximum 8 | `status`; makes uploaded steps runnable without a Flash erase |
 
 Control modes:
 
@@ -79,7 +80,14 @@ speed, delay, home, tracking PID, microstep setup, chopper setup and stop steps
 without blocking the control loop. Program step `op` values are: `1` absolute
 position, `2` relative position, `3` open-loop steps, `4` speed, `5` delay,
 `6` home, `7` tracking PID, `8` stop, `9` microsteps (`value=1/2/.../256`),
-and `10` chopper (`flags=0` StealthChop, `1` SpreadCycle).
+and `10` chopper (`flags=0` StealthChop, `1` SpreadCycle). For speed step `4`,
+set `flags bit0=1` to interpret `value` as RPM at execution time; the firmware
+converts it using the microstep value currently active in that program flow.
+
+Protocol v8 adds `0x1D Program stage`. Upload all `0x19 Program step` frames,
+then stage their count with `0x1D` to run the RAM copy repeatedly. `0x1A Save
+program` is accepted only after a successful stage and performs the one Flash
+erase/write operation. This keeps normal test runs away from Flash endurance.
 
 Stream telemetry is: `status, zero_angle_cdeg, target_cdeg(i32),
 position_error_cdeg(i32), position_pid_active, rpm_x10, raw_angle,

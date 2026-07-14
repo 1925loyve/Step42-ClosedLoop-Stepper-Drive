@@ -825,6 +825,17 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_PROGRAM_STAGE)
+  {
+    if (len != 1U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, Step42Control_StageProgram(payload[0]));
+    return;
+  }
+
   if (cmd == CTRL_CMD_PROGRAM_RUN)
   {
     if (len != 0U)
@@ -879,6 +890,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_PROGRAM_SAVE:
   case CTRL_CMD_PROGRAM_RUN:
   case CTRL_CMD_PROGRAM_QUERY:
+  case CTRL_CMD_PROGRAM_STAGE:
     return 1U;
   default:
     return 0U;

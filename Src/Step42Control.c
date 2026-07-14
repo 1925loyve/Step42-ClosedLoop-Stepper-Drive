@@ -111,6 +111,9 @@ static uint8_t external_task_marked = 0U;
 static uint8_t program_mode = 0U;
 static uint8_t program_running = 0U;
 static uint8_t program_count = 0U;
+static uint8_t program_ready = 0U;
+static uint8_t program_editing = 0U;
+static uint8_t program_save_armed = 0U;
 static uint8_t program_index = 0U;
 static uint8_t program_step_started = 0U;
 static uint32_t program_step_start_ms = 0U;
@@ -173,6 +176,9 @@ static void Program_Load(void)
       (const Step42ProgramFlash_t *)STEP42_PROGRAM_CFG_ADDR;
 
   program_count = 0U;
+  program_ready = 0U;
+  program_editing = 0U;
+  program_save_armed = 0U;
   if ((stored->magic != STEP42_PROGRAM_MAGIC) ||
       (stored->version != STEP42_PROGRAM_VERSION) ||
       (stored->count > STEP42_PROGRAM_MAX_STEPS) ||
@@ -183,6 +189,7 @@ static void Program_Load(void)
 
   program_count = (uint8_t)stored->count;
   memcpy(program_steps, stored->steps, sizeof(program_steps));
+  program_ready = 1U;
 }
 
 static void Config_Load(void)
@@ -291,6 +298,26 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
   }
 
   program_steps[index] = *step;
+  program_editing = 1U;
+  program_save_armed = 0U;
+  return CTRL_STATUS_OK;
+}
+
+uint8_t Step42Control_StageProgram(uint8_t count)
+{
+  if (count > STEP42_PROGRAM_MAX_STEPS)
+  {
+    return CTRL_STATUS_RANGE;
+  }
+  if (program_running != 0U)
+  {
+    return CTRL_STATUS_BUSY;
+  }
+
+  program_count = count;
+  program_ready = 1U;
+  program_editing = 0U;
+  program_save_armed = 1U;
   return CTRL_STATUS_OK;
 }
 
@@ -309,6 +336,11 @@ uint8_t Step42Control_SaveProgram(uint8_t count)
   if (count > STEP42_PROGRAM_MAX_STEPS)
   {
     return CTRL_STATUS_RANGE;
+  }
+  if ((program_save_armed == 0U) || (program_editing != 0U) ||
+      (count != program_count))
+  {
+    return CTRL_STATUS_BAD_MODE;
   }
   if ((program_last_flash_write_ms != 0U) &&
       ((uint32_t)(HAL_GetTick() - program_last_flash_write_ms) < STEP42_FLASH_WRITE_GUARD_MS))
@@ -345,6 +377,9 @@ uint8_t Step42Control_SaveProgram(uint8_t count)
   }
   HAL_FLASH_Lock();
   program_count = count;
+  program_ready = 1U;
+  program_editing = 0U;
+  program_save_armed = 0U;
   program_last_flash_write_ms = HAL_GetTick();
   return CTRL_STATUS_OK;
 }
@@ -381,7 +416,8 @@ uint8_t Step42Control_GetProgramCount(void)
 
 uint8_t Step42Control_StartProgram(void)
 {
-  if ((program_mode == 0U) || (program_count == 0U) ||
+  if ((program_mode == 0U) || (program_ready == 0U) ||
+      (program_editing != 0U) || (program_count == 0U) ||
       (motor_user_enabled == 0U) || (thermal_lockout != 0U) || (stall_fault != 0U))
   {
     return CTRL_STATUS_BAD_MODE;
@@ -446,9 +482,23 @@ void Step42Control_ProcessProgram(void)
       (void)Step42Control_MoveStepsByMode(step->value, (float)step->speed, (float)step->accel);
       break;
     case STEP42_PROGRAM_OP_SPEED:
+    {
+      float speed = (float)step->value;
+
+      if ((step->flags & STEP42_PROGRAM_SPEED_FLAG_RPM) != 0U)
+      {
+        speed = speed * motor_steps_per_rev / 60.0f;
+      }
+      if ((AbsF(speed) > 5000.0f) || (step->accel == 0U))
+      {
+        program_running = 0U;
+        Step42Control_StopMotion();
+        return;
+      }
       (void)Step42Control_SetMode(CTRL_MODE_OPEN_SPEED);
-      Step42Control_RunSpeedByMode((float)step->value, (float)step->accel);
+      Step42Control_RunSpeedByMode(speed, (float)step->accel);
       break;
+    }
     case STEP42_PROGRAM_OP_HOME:
       (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
       (void)Step42Control_Home(step->flags);

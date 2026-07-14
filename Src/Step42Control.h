@@ -26,6 +26,8 @@ extern Stepper_t Motor_42;
 #define STEP42_PROGRAM_OP_MICROSTEP    (9U)
 #define STEP42_PROGRAM_OP_CHOPPER      (10U)
 
+#define STEP42_PROGRAM_SPEED_FLAG_RPM  (0x01U)
+
 typedef struct
 {
   uint8_t op;
@@ -55,6 +57,7 @@ void Step42Control_HandleKey(int8_t key_flag);
 uint8_t Step42Control_SetProgramMode(uint8_t enable);
 uint8_t Step42Control_IsProgramMode(void);
 uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *step);
+uint8_t Step42Control_StageProgram(uint8_t count);
 uint8_t Step42Control_SaveProgram(uint8_t count);
 uint8_t Step42Control_StartProgram(void);
 void Step42Control_ProcessProgram(void);
