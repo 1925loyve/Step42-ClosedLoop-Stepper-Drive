@@ -49,7 +49,6 @@ void Step42Control_ResetTrackingDefaults(void);
 void Step42Control_SetThermalLockout(uint8_t lockout);
 
 uint8_t Step42Control_IsUserEnabled(void);
-uint8_t Step42Control_IsMotionActive(void);
 uint8_t Step42Control_GetMode(void);
 uint16_t Step42Control_GetMicrosteps(void);
 float Step42Control_GetClosedAccel(void);
