@@ -263,6 +263,23 @@ uint16_t Step42_BuildSetAngle(uint8_t *buf, uint16_t max_len, uint8_t seq, float
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_ANGLE, seq, payload, sizeof(payload));
 }
 
+uint16_t Step42_BuildMoveRelativeAngle(uint8_t *buf,
+                                       uint16_t max_len,
+                                       uint8_t seq,
+                                       float delta_deg)
+{
+    uint8_t payload[4];
+    float scaled = delta_deg * 100.0f;
+
+    if ((scaled < -720000.0f) || (scaled > 720000.0f))
+    {
+        return 0U;
+    }
+    Step42_WriteI32(payload, 0U, (int32_t)scaled);
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_RELATIVE_ANGLE, seq,
+                             payload, sizeof(payload));
+}
+
 uint16_t Step42_BuildSetSpeed(uint8_t *buf,
                               uint16_t max_len,
                               uint8_t seq,

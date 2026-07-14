@@ -36,6 +36,7 @@ extern "C" {
 #define STEP42_CMD_TRACK_DEFAULT    (0x14U)
 #define STEP42_CMD_TRACK_QUERY      (0x15U)
 #define STEP42_CMD_CHOPPER_MODE     (0x16U)
+#define STEP42_CMD_RELATIVE_ANGLE   (0x17U)
 
 #define STEP42_STATUS_OK            (0x00U)
 #define STEP42_STATUS_BAD_LEN       (0x01U)
@@ -153,6 +154,10 @@ uint16_t Step42_BuildFrame(uint8_t *buf,
 uint16_t Step42_BuildPing(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildEnable(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t enable);
 uint16_t Step42_BuildSetAngle(uint8_t *buf, uint16_t max_len, uint8_t seq, float angle_deg);
+uint16_t Step42_BuildMoveRelativeAngle(uint8_t *buf,
+                                       uint16_t max_len,
+                                       uint8_t seq,
+                                       float delta_deg);
 uint16_t Step42_BuildSetSpeed(uint8_t *buf,
                               uint16_t max_len,
                               uint8_t seq,

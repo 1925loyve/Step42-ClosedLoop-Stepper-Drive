@@ -337,6 +337,33 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_RELATIVE_ANGLE)
+  {
+    int32_t delta_cdeg;
+
+    if (len != 4U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+
+    delta_cdeg = Ctrl_ReadI32(payload);
+    if ((delta_cdeg < -720000) || (delta_cdeg > 720000))
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+
+    if (Step42Control_MoveRelativeAngleByMode(((float)delta_cdeg) / 100.0f) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
   if (cmd == CTRL_CMD_PID)
   {
     int32_t kp_x100;
@@ -475,7 +502,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     }
 
     mode = Step42Control_GetMode();
-    if ((mode != CTRL_MODE_OPEN_POSITION) && (mode != CTRL_MODE_CLOSED_POSITION))
+    if (mode != CTRL_MODE_OPEN_POSITION)
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
       return;

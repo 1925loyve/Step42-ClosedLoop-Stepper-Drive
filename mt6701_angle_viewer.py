@@ -50,6 +50,7 @@ CMD_TRACK_INPUT = 0x13
 CMD_TRACK_DEFAULT = 0x14
 CMD_TRACK_QUERY = 0x15
 CMD_CHOPPER_MODE = 0x16
+CMD_RELATIVE_ANGLE = 0x17
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -312,6 +313,7 @@ class AngleViewer(tk.Tk):
         self.closed_accel_status_var = tk.StringVar(value="闭环加速度：未知")
         self.home_mode_var = tk.StringVar(value="就近回零")
         self.home_status_var = tk.StringVar(value="零点：未知")
+        self.position_target_mode_var = tk.StringVar(value="绝对目标")
         self.target_angle_var = tk.StringVar(value="0.0")
         self.angle_status_var = tk.StringVar(value="角度：未发送")
         self.move_steps_var = tk.StringVar(value="3200")
@@ -403,11 +405,14 @@ class AngleViewer(tk.Tk):
         self.pending_tx = None
         status = payload[0] if payload else None
         context = item.get("context") or {}
-        if cmd == CMD_ANGLE:
+        if cmd in (CMD_ANGLE, CMD_RELATIVE_ANGLE):
             if status == 0 and "target_angle" in context:
                 self.target_angle_deg = context["target_angle"]
                 self._append_wave_sample(time.monotonic())
                 self.angle_status_var.set(f"角度：设备已确认 {self.target_angle_deg:.3f}°")
+            elif status == 0 and "relative_angle" in context:
+                self.angle_status_var.set(f"相对移动：设备已确认 {context['relative_angle']:+.3f}°，正在刷新目标")
+                self.after(80, self.send_query)
             elif status is not None:
                 self.angle_status_var.set(f"角度：设备拒绝，{STATUS_NAMES.get(status, status)}")
         self.after_idle(self._send_next_queued)
@@ -686,11 +691,9 @@ class AngleViewer(tk.Tk):
                 row=row, column=column + 1, sticky=tk.W, pady=2)
         pid_actions = ttk.Frame(position_pid)
         pid_actions.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(5, 0))
-        ttk.Button(pid_actions, text="写入 PID", command=self.send_pid_values).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(pid_actions, text="写入加速度", command=self.send_closed_accel).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=3)
+        ttk.Button(pid_actions, text="应用运行参数", command=self.apply_position_params).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(pid_actions, text="填入默认参数", command=self.fill_default_motion_params).pack(
-            side=tk.LEFT, fill=tk.X, expand=True)
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
         ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=175).grid(
             row=3, column=0, columnspan=6, sticky=tk.W, pady=(5, 0))
 
@@ -732,11 +735,13 @@ class AngleViewer(tk.Tk):
 
         absolute = ttk.LabelFrame(test_motor, text="闭环多圈位置", padding=7)
         absolute.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(absolute, text="目标 -7200° ~ 7200°").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(absolute, textvariable=self.target_angle_var, width=11).grid(row=0, column=1, padx=5)
+        ttk.Combobox(absolute, textvariable=self.position_target_mode_var,
+                     values=("绝对目标", "相对移动"), state="readonly", width=9).grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(absolute, text="角度 -7200° ~ 7200°").grid(row=0, column=1, sticky=tk.W, padx=(7, 0))
+        ttk.Entry(absolute, textvariable=self.target_angle_var, width=11).grid(row=0, column=2, padx=5)
         ttk.Button(absolute, text="发送闭环角度指令", command=self.send_angle_value).grid(
-            row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
-        ttk.Label(absolute, textvariable=self.angle_status_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+            row=1, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+        ttk.Label(absolute, textvariable=self.angle_status_var).grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(5, 0))
 
         tracking_base = ttk.LabelFrame(tracking, text="基础配置", padding=6)
         tracking_base.pack(fill=tk.X)
@@ -1137,6 +1142,11 @@ class AngleViewer(tk.Tk):
             self.angle_status_var.set("角度：已发送停止")
 
     def send_pid_values(self):
+        payload = self._build_position_pid_payload()
+        if payload is not None and self._send(CMD_PID, payload):
+            self.pid_status_var.set("PID：已应用运行参数")
+
+    def _build_position_pid_payload(self):
         try:
             kp = float(self.kp_var.get())
             ki = float(self.ki_var.get())
@@ -1145,18 +1155,18 @@ class AngleViewer(tk.Tk):
             deadband = float(self.deadband_var.get())
         except ValueError:
             self.pid_status_var.set("PID：参数不是有效数字")
-            return
+            return None
         kp_i = int(round(kp * 100))
         ki_i = int(round(ki * 100))
         kd_i = int(round(kd * 100))
         dead_i = int(round(deadband * 1000))
         if not (-2147483648 <= kp_i <= 2147483647 and -2147483648 <= ki_i <= 2147483647 and -2147483648 <= kd_i <= 2147483647):
             self.pid_status_var.set("PID：Kp/Ki/Kd 超范围")
-            return
+            return None
         if not (1 <= limit <= 65535 and 0 <= dead_i <= 10000):
             self.pid_status_var.set("PID：Limit 或 Deadband 超范围")
-            return
-        payload = struct.pack(
+            return None
+        return struct.pack(
             "<iiiHH",
             kp_i,
             ki_i,
@@ -1164,8 +1174,21 @@ class AngleViewer(tk.Tk):
             limit,
             dead_i,
         )
-        if self._send(CMD_PID, payload):
-            self.pid_status_var.set("PID：已发送写入")
+
+    def apply_position_params(self):
+        payload = self._build_position_pid_payload()
+        try:
+            accel = int(float(self.closed_accel_var.get()))
+        except ValueError:
+            self.pid_status_var.set("运行参数：闭环加速度不是有效整数")
+            return
+        if payload is None:
+            return
+        if not (1 <= accel <= 65535):
+            self.pid_status_var.set("运行参数：闭环加速度范围为1~65535")
+            return
+        if self._send(CMD_PID, payload) and self._send(CMD_CLOSED_ACCEL, struct.pack("<H", accel)):
+            self.pid_status_var.set("运行参数：PID 与闭环加速度已应用；重启后恢复默认或已保存档案")
 
     def send_speed_value(self):
         if self.current_mode != MODE_OPEN_SPEED:
@@ -1195,8 +1218,8 @@ class AngleViewer(tk.Tk):
             )
 
     def send_move_steps(self):
-        if self.current_mode not in (MODE_OPEN_POSITION, MODE_CLOSED_POSITION):
-            self.move_status_var.set("脉冲位置：当前不是位置模式")
+        if self.current_mode != MODE_OPEN_POSITION:
+            self.move_status_var.set("脉冲位置：仅开环位置可用；闭环请使用相对/绝对角度")
             return
         try:
             steps = int(float(self.move_steps_var.get()))
@@ -1228,8 +1251,11 @@ class AngleViewer(tk.Tk):
             self.angle_status_var.set("角度：范围必须是 -7200~7200")
             return
         payload = struct.pack("<i", int(round(angle * 100)))
-        if self._send(CMD_ANGLE, payload, {"target_angle": angle}):
-            self.angle_status_var.set(f"角度：等待设备确认 {angle:.3f}°")
+        if self.position_target_mode_var.get() == "相对移动":
+            if self._send(CMD_RELATIVE_ANGLE, payload, {"relative_angle": angle}):
+                self.angle_status_var.set(f"相对移动：等待设备确认 {angle:+.3f}°")
+        elif self._send(CMD_ANGLE, payload, {"target_angle": angle}):
+            self.angle_status_var.set(f"绝对目标：等待设备确认 {angle:.3f}°")
 
     def send_track_basic(self):
         try:
@@ -1500,7 +1526,7 @@ class AngleViewer(tk.Tk):
                 self.pid_status_var.set(f"PID：{text}")
             elif cmd == CMD_SPEED:
                 self.speed_status_var.set(f"速度：{text}")
-            elif cmd == CMD_ANGLE and not completed_pending:
+            elif cmd in (CMD_ANGLE, CMD_RELATIVE_ANGLE) and not completed_pending:
                 self.angle_status_var.set(f"角度：{text}")
             elif cmd == CMD_STOP:
                 self.speed_status_var.set(f"停止：{text}")

@@ -21,6 +21,7 @@
 #define SPEED_FILTER_ALPHA (0.25f)
 #define WEAK_PID_MIN_CORRECTION_SPEED (80.0f)
 #define ENCODER_UNWRAP_REBASE_DEG (7200.0f)
+#define CLOSED_POSITION_LIMIT_DEG (7200.0f)
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim6;
@@ -663,6 +664,26 @@ void Step42Control_MoveToAngleByMode(float target_angle)
   {
     Move_ToAbsoluteAngle(target_angle);
   }
+}
+
+uint8_t Step42Control_MoveRelativeAngleByMode(float delta_angle)
+{
+  float target_angle;
+
+  if (control_mode != CTRL_MODE_CLOSED_POSITION)
+  {
+    return 0U;
+  }
+
+  target_angle = mt6701_unwrapped_deg + delta_angle;
+  if ((target_angle < -CLOSED_POSITION_LIMIT_DEG) ||
+      (target_angle > CLOSED_POSITION_LIMIT_DEG))
+  {
+    return 0U;
+  }
+
+  Move_ToAbsoluteAngle(target_angle);
+  return 1U;
 }
 
 uint8_t Step42Control_MoveStepsByMode(int32_t steps, float speed, float accel)

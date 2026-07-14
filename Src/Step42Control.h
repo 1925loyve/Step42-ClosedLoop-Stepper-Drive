@@ -17,6 +17,7 @@ void Step42Control_Init(void);
 void Step42Control_SetUserEnable(uint8_t enable);
 uint8_t Step42Control_SetMode(uint8_t mode);
 void Step42Control_MoveToAngleByMode(float target_angle);
+uint8_t Step42Control_MoveRelativeAngleByMode(float delta_angle);
 uint8_t Step42Control_MoveStepsByMode(int32_t steps, float speed, float accel);
 void Step42Control_RunSpeedByMode(float speed, float accel);
 void Step42Control_StopMotion(void);

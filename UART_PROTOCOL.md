@@ -48,6 +48,7 @@ Status byte:
 | `0x08` | Mode | `u8 mode` | `status` |
 | `0x09` | Stop | none | `status` |
 | `0x13` | Tracking error input | `i32 primary_centi, i32 secondary_centi`, each `-100000~100000` | `status` |
+| `0x17` | Relative closed-loop angle | `i32 delta_cdeg`, range `-720000~720000`; resulting target must remain within `-7200°~7200°` | `status` |
 
 Control modes:
 
