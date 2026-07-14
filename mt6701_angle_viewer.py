@@ -96,11 +96,17 @@ CHOPPER_MODE_NAMES = {value: key for key, value in CHOPPER_MODE_LABELS.items()}
 
 HOME_MODE_LABELS = {
     "就近回零": 0,
-    "正向无限位": 1,
-    "反向无限位": 2,
+    "正向单圈回零": 1,
+    "反向单圈回零": 2,
+    "多圈绝对回零": 3,
 }
 
 HOME_MODE_NAMES = {value: key for key, value in HOME_MODE_LABELS.items()}
+HOME_MODE_ALIASES = {"正向无限位": 1, "反向无限位": 2, "负向无限位": 2}
+
+
+def home_mode_value(name):
+    return HOME_MODE_LABELS.get(name, HOME_MODE_ALIASES.get(name, 0))
 
 DEFAULT_MOTION_PARAMS = {
     1: {"kp": 5.63, "ki": 0.01, "kd": 0.0, "limit": 5000, "deadband": 2.56, "accel": 94},
@@ -909,7 +915,7 @@ class AngleViewer(tk.Tk):
                 ("duration", "持续时间 ms", "无限", None),
             ),
             "延时": (("duration", "延时 ms", "200", None),),
-            "回零": (("mode", "回零方式", "就近回零", ("就近回零", "正向无限位", "负向无限位")),),
+            "回零": (("mode", "回零方式", "就近回零", tuple(HOME_MODE_LABELS.keys())),),
             "设置细分": (("microsteps", "细分", "32", ("1", "2", "4", "8", "16", "32", "64", "128", "256")),),
             "设置斩波": (("chopper", "斩波模式", "静音 StealthChop", ("静音 StealthChop", "力矩 SpreadCycle")),),
             "运行内置PID": (
@@ -1050,7 +1056,7 @@ class AngleViewer(tk.Tk):
             duration = self._program_duration(params["duration"])
             op = 5
         elif command_type == "回零":
-            flags = {"就近回零": 0, "正向无限位": 1, "负向无限位": 2}.get(params.get("mode"), 0)
+            flags = home_mode_value(params.get("mode"))
             op = 6
         elif command_type == "设置细分":
             value = int(params["microsteps"])
@@ -1260,7 +1266,7 @@ class AngleViewer(tk.Tk):
             self.closed_accel_status_var.set(f"闭环加速度：已发送 {accel}")
 
     def send_home_mode(self):
-        mode = HOME_MODE_LABELS.get(self.home_mode_var.get(), 0)
+        mode = home_mode_value(self.home_mode_var.get())
         if self._send(CMD_HOME_MODE, struct.pack("<B", mode)):
             self.home_status_var.set(f"回零模式：已发送 {self.home_mode_var.get()}")
 
@@ -1272,10 +1278,8 @@ class AngleViewer(tk.Tk):
         if self.current_mode != MODE_CLOSED_POSITION:
             self.home_status_var.set("回零：当前不是闭环位置模式")
             return
-        mode = HOME_MODE_LABELS.get(self.home_mode_var.get(), 0)
+        mode = home_mode_value(self.home_mode_var.get())
         if self._send(CMD_HOME, struct.pack("<B", mode)):
-            self.target_angle_deg = 0.0
-            self._append_wave_sample(time.monotonic())
             self.home_status_var.set(f"回零：已发送 {self.home_mode_var.get()}")
 
     def send_enable(self, enable):

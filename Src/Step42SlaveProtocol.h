@@ -10,7 +10,7 @@
 #define CTRL_RESP_SOF2 (0xA5U)
 #define CTRL_MAX_PAYLOAD (64U)
 #define CTRL_MAX_FRAME_SIZE (CTRL_MAX_PAYLOAD + 6U)
-#define CTRL_PROTO_VERSION (8U)
+#define CTRL_PROTO_VERSION (9U)
 
 #define CTRL_CMD_PING (0x01U)
 #define CTRL_CMD_ENABLE (0x02U)
@@ -58,6 +58,7 @@
 #define CTRL_HOME_NEAREST (0x00U)
 #define CTRL_HOME_POSITIVE (0x01U)
 #define CTRL_HOME_NEGATIVE (0x02U)
+#define CTRL_HOME_MULTI_TURN (0x03U)
 
 typedef struct
 {

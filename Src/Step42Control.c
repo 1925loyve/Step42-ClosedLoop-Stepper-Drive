@@ -208,7 +208,7 @@ static void Config_Load(void)
 
   zero_valid = (cfg->zero_valid != 0UL) ? 1U : 0U;
   zero_offset_deg = Normalize360(((float)cfg->zero_cdeg) / 100.0f);
-  if (cfg->home_mode <= CTRL_HOME_NEGATIVE)
+  if (cfg->home_mode <= CTRL_HOME_MULTI_TURN)
   {
     home_mode = (uint8_t)cfg->home_mode;
   }
@@ -288,6 +288,10 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
     return CTRL_STATUS_RANGE;
   }
   if ((step->op == STEP42_PROGRAM_OP_CHOPPER) && (step->flags > 1U))
+  {
+    return CTRL_STATUS_RANGE;
+  }
+  if ((step->op == STEP42_PROGRAM_OP_HOME) && (step->flags > CTRL_HOME_MULTI_TURN))
   {
     return CTRL_STATUS_RANGE;
   }
@@ -522,7 +526,10 @@ void Step42Control_ProcessProgram(void)
       Step42Control_StopMotion();
       break;
     case STEP42_PROGRAM_OP_MICROSTEP:
-      (void)Step42Control_SetMode(CTRL_MODE_OPEN_POSITION);
+      if (control_mode == CTRL_MODE_TRACK_PID)
+      {
+        (void)Step42Control_SetMode(CTRL_MODE_OPEN_POSITION);
+      }
       (void)Step42Control_SetMicrosteps((uint16_t)step->value);
       break;
     case STEP42_PROGRAM_OP_CHOPPER:
@@ -992,6 +999,8 @@ void Step42Control_SetUserEnable(uint8_t enable)
 
 uint8_t Step42Control_SetMode(uint8_t mode)
 {
+  uint8_t previous_mode = control_mode;
+
   if ((mode != CTRL_MODE_OPEN_SPEED) &&
       (mode != CTRL_MODE_OPEN_POSITION) &&
       (mode != CTRL_MODE_CLOSED_POSITION) &&
@@ -1001,6 +1010,12 @@ uint8_t Step42Control_SetMode(uint8_t mode)
   }
 
   Step42Control_StopMotion();
+  if ((mode == CTRL_MODE_CLOSED_POSITION) &&
+      (previous_mode != CTRL_MODE_CLOSED_POSITION))
+  {
+    /* A new closed-position session starts from the current physical cycle. */
+    Encoder_RebaseUnwrapped();
+  }
   if (mode == CTRL_MODE_TRACK_PID)
   {
     if (motor_microsteps != 32U)
@@ -1131,7 +1146,6 @@ void Step42Control_StopMotion(void)
   Step42Tracking_Stop();
   closed_speed_target_steps = 0.0f;
   Stepper_ForceStopPosition(&Motor_42);
-  Encoder_RebaseUnwrapped();
   external_task_marked = 0U;
   led_white_off;
 }
@@ -1197,7 +1211,7 @@ uint8_t Step42Control_SetHomeMode(uint8_t mode)
 {
   uint8_t status;
 
-  if (mode > CTRL_HOME_NEGATIVE)
+  if (mode > CTRL_HOME_MULTI_TURN)
   {
     return CTRL_STATUS_RANGE;
   }
@@ -1243,8 +1257,9 @@ uint8_t Step42Control_SetCurrentZero(void)
 uint8_t Step42Control_Home(uint8_t mode)
 {
   float delta;
+  float target;
 
-  if (mode > CTRL_HOME_NEGATIVE)
+  if (mode > CTRL_HOME_MULTI_TURN)
   {
     mode = home_mode;
   }
@@ -1265,9 +1280,13 @@ uint8_t Step42Control_Home(uint8_t mode)
       delta = 0.0f;
     }
   }
-  else
+  else if (mode == CTRL_HOME_NEGATIVE)
   {
     delta = -mt6701_angle_deg;
+  }
+  else
+  {
+    delta = 0.0f;
   }
 
   if (motor_user_enabled == 0U)
@@ -1275,7 +1294,8 @@ uint8_t Step42Control_Home(uint8_t mode)
     Step42Control_SetUserEnable(1U);
   }
 
-  weak_pid_target_deg = mt6701_unwrapped_deg + delta;
+  target = (mode == CTRL_HOME_MULTI_TURN) ? 0.0f : (mt6701_unwrapped_deg + delta);
+  weak_pid_target_deg = target;
   PID_Reset(&weak_pid);
   weak_pid_enable = 1U;
   led_white_on;

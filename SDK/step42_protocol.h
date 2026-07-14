@@ -77,6 +77,7 @@ extern "C" {
 #define STEP42_HOME_NEAREST         (0x00U)
 #define STEP42_HOME_POSITIVE        (0x01U)
 #define STEP42_HOME_NEGATIVE        (0x02U)
+#define STEP42_HOME_MULTI_TURN      (0x03U)
 
 typedef enum
 {

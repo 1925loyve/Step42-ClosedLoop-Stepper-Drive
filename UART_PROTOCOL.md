@@ -92,6 +92,12 @@ After power-up, with the motor enabled, a KEY1 long press starts the valid
 stored program without requiring program mode. While that offline program is
 running, external motion commands are still denied until it completes or stops.
 
+Protocol v9 extends home mode: `0=nearest single-turn zero`, `1=positive
+single-turn zero`, `2=negative single-turn zero`, `3=multi-turn absolute zero`.
+Modes `1` and `2` do not use a physical limit switch; they only select which
+direction to reach the next `0°` point in the current mechanical revolution.
+Mode `3` moves the continuous closed-position coordinate back to `0°`.
+
 Stream telemetry is: `status, zero_angle_cdeg, target_cdeg(i32),
 position_error_cdeg(i32), position_pid_active, rpm_x10, raw_angle,
 tracking_primary_centi(i32), tracking_secondary_centi(i32), tracking_output(i16),

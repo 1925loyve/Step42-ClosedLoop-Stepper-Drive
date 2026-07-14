@@ -359,7 +359,7 @@ uint16_t Step42_BuildSetHomeMode(uint8_t *buf, uint16_t max_len, uint8_t seq, ui
 {
     uint8_t payload[1];
 
-    if (mode > STEP42_HOME_NEGATIVE)
+    if (mode > STEP42_HOME_MULTI_TURN)
     {
         return 0U;
     }
@@ -377,7 +377,7 @@ uint16_t Step42_BuildHome(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t m
 {
     uint8_t payload[1];
 
-    if (mode > STEP42_HOME_NEGATIVE)
+    if (mode > STEP42_HOME_MULTI_TURN)
     {
         return 0U;
     }
