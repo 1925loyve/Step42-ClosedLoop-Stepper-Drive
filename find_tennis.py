@@ -44,8 +44,8 @@ while not app.need_exit():
         
         img.draw_cross(cx, cy, image.COLOR_WHITE, 2)
         
-        # Step42 Error UART fast path: one signed error value per line.
-        # This single-axis board tracks horizontal pixel error only.
+        # Keep both err_x and err_y for a future two-axis gimbal. This board's
+        # one-axis Error UART fast path currently receives horizontal err_x.
         data = f"{err_x}\n"
         ser.write(data.encode())
         
