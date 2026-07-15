@@ -23,6 +23,8 @@ This is intended for a vision module, not for the PC tuning tool:
 - Each valid line directly refreshes the tracking PID input. A 60 fps vision
   source is therefore sufficient; firmware PID continues at its configured
   frequency between frames and stops on input timeout.
+- It remains available while an internal `运行内置PID` instruction is running:
+  the instruction owns the motion mode, while Error UART supplies live error.
 - `0x1F Tracking direction`: request `u8 reverse` (`0=normal`, `1=reverse`),
   response `status`. This is normally sent through Debug UART by the upper
   computer's `误差反向` checkbox.
@@ -94,7 +96,9 @@ automatically; the host does not need to select an interface type manually.
 Protocol v7 further appends `program_mode`, `program_running`, and
 `program_count` to Query. While program mode is enabled, external motion
 commands (`angle`, `speed`, `relative angle`, `move steps`, `home`, mode change,
-tracking error input), parameter writes and drive settings return `DENIED`.
+parameter writes and drive settings return `DENIED`. Tracking error input is
+the sole exception: it is treated as live sensor data and is accepted only
+while the current internal instruction has entered tracking PID mode.
 Only telemetry/query, enable, stop and program-management commands remain
 available. The program executor itself may run position, open-step,
 speed, delay, home, tracking PID, microstep setup, chopper setup and stop steps

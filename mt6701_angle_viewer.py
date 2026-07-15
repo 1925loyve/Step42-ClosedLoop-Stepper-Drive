@@ -931,7 +931,7 @@ class AngleViewer(tk.Tk):
             "设置斩波": (("chopper", "斩波模式", "静音 StealthChop", ("静音 StealthChop", "力矩 SpreadCycle")),),
             "运行内置PID": (
                 ("pid_mode", "PID结构", "双环PID", ("单环PID", "双环PID")),
-                ("error", "内部测试误差", "0", None),
+                ("error", "启动测试误差(0=等视觉)", "0", None),
                 ("duration", "持续时间 ms", "无限", None),
             ),
             "停止电机": (),
@@ -958,7 +958,7 @@ class AngleViewer(tk.Tk):
         if command_type == "设置斩波":
             return f"设置斩波 {params.get('chopper', '?')}"
         if command_type == "运行内置PID":
-            return (f"运行 {params.get('pid_mode', '?')}，误差 {params.get('error', '0')}，"
+            return (f"运行 {params.get('pid_mode', '?')}，启动误差 {params.get('error', '0')}，"
                     f"持续 {params.get('duration', '无限')} ms")
         return "停止电机"
 
@@ -1806,6 +1806,7 @@ class AngleViewer(tk.Tk):
         self.stream_status_var.set("数据流：开启" if stream else "数据流：关闭")
         self.current_mode = mode
         self.mode_status_var.set(f"模式：{MODE_NAMES.get(mode, '未知')}")
+        self._sync_waveform_presentation()
         if microsteps is not None:
             self.current_microsteps = microsteps
             self.microstep_status_var.set(f"细分：当前 {microsteps}")
@@ -1922,16 +1923,28 @@ class AngleViewer(tk.Tk):
         self._redraw_waveform()
 
     def _on_interface_role_changed(self, *_args):
-        """Switch waveform meaning without changing the physical UART protocol."""
+        """Refresh waveform semantics when the connected interface changes."""
+        self._sync_waveform_presentation(force=True)
+
+    def _sync_waveform_presentation(self, force=False):
+        """Tracking data always takes priority over the physical UART role."""
+        tracking_active = self.current_mode == MODE_TRACK_PID
+        error_view = tracking_active or self.interface_role_var.get() == "Debug"
+        view_kind = "error" if error_view else "position"
+
+        if not force and getattr(self, "wave_view_kind", None) == view_kind:
+            return
+
+        self.wave_view_kind = view_kind
         self.wave_history.clear()
-        if self.interface_role_var.get() == "Error":
-            self.wave_range_limit = 7200.0
-            if hasattr(self, "wave_frame"):
-                self.wave_frame.configure(text="多圈位置波形：目标 / 当前位置")
-        else:
+        if view_kind == "error":
             self.wave_range_limit = 1000.0
             if hasattr(self, "wave_frame"):
                 self.wave_frame.configure(text="视觉追踪波形：目标误差 0 / 当前误差")
+        else:
+            self.wave_range_limit = 7200.0
+            if hasattr(self, "wave_frame"):
+                self.wave_frame.configure(text="多圈位置波形：目标 / 当前位置")
         self._redraw_waveform()
 
     def zoom_waveform(self, scale):
@@ -1939,8 +1952,9 @@ class AngleViewer(tk.Tk):
         self._redraw_waveform()
 
     def zoom_waveform_vertical(self, scale):
-        minimum = 5.0 if self.interface_role_var.get() == "Debug" else 90.0
-        maximum = 7200.0 if self.interface_role_var.get() == "Error" else 1000.0
+        error_view = getattr(self, "wave_view_kind", "position") == "error"
+        minimum = 5.0 if error_view else 90.0
+        maximum = 1000.0 if error_view else 7200.0
         self.wave_range_limit = max(minimum, min(maximum, self.wave_range_limit * scale))
         self._redraw_waveform()
 
@@ -1951,7 +1965,7 @@ class AngleViewer(tk.Tk):
     def _append_wave_sample(self, now):
         if self.wave_paused_var.get():
             return
-        if self.interface_role_var.get() == "Debug":
+        if self.current_mode == MODE_TRACK_PID or self.interface_role_var.get() == "Debug":
             current = self.track_primary_error
             target = 0.0
         else:

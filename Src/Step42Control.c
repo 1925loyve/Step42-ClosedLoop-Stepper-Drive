@@ -587,9 +587,21 @@ void Step42Control_ProcessProgram(void)
       (void)Step42Control_Home(step->flags);
       break;
     case STEP42_PROGRAM_OP_TRACK:
+    {
+      const Step42TrackingConfig_t *tracking = Step42Control_GetTrackingConfig();
+      uint8_t tracking_mode = ((step->flags & 0x01U) != 0U) ?
+                              STEP42_TRACK_CASCADE : STEP42_TRACK_SINGLE;
+
+      /* The program owns the motion mode, while UART continues to provide
+         live visual error samples to this tracking controller. */
+      (void)Step42Control_SetTrackingBasic(tracking_mode,
+                                            tracking->speed_percent,
+                                            tracking->accel_percent,
+                                            tracking->frequency_khz);
       (void)Step42Control_SetMode(CTRL_MODE_TRACK_PID);
       Step42Control_SetTrackingInput(((float)step->value) / 100.0f, 0.0f);
       break;
+    }
     case STEP42_PROGRAM_OP_STOP:
       Step42Control_StopMotion();
       break;
