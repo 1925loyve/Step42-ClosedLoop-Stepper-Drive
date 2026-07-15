@@ -58,6 +58,7 @@ CMD_PROGRAM_RUN = 0x1B
 CMD_PROGRAM_QUERY = 0x1C
 CMD_PROGRAM_STAGE = 0x1D
 CMD_MOTION_PROFILE = 0x1E
+CMD_TRACK_DIRECTION = 0x1F
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -359,6 +360,7 @@ class AngleViewer(tk.Tk):
         self.track_inner_kd_var = tk.StringVar(value="0.0")
         self.track_primary_var = tk.StringVar(value="0.0")
         self.track_secondary_var = tk.StringVar(value="0.0")
+        self.track_reverse_var = tk.BooleanVar(value=False)
         self.track_status_var = tk.StringVar(value="误差PID：等待读取")
         self.track_filter_var = tk.StringVar(value="0.25")
         self.track_gain_min_var = tk.StringVar(value="1.0")
@@ -810,6 +812,8 @@ class AngleViewer(tk.Tk):
         ttk.Label(tracking_input, text="内环反馈").grid(row=0, column=2, sticky=tk.W)
         ttk.Entry(tracking_input, textvariable=self.track_secondary_var, width=8).grid(row=0, column=3, padx=4)
         ttk.Button(tracking_input, text="发送", command=self.send_track_input).grid(row=0, column=4)
+        ttk.Checkbutton(tracking_input, text="误差反向", variable=self.track_reverse_var,
+                        command=self.send_track_direction).grid(row=0, column=5, padx=(8, 0))
         ttk.Label(tracking, textvariable=self.track_status_var, wraplength=300).pack(anchor=tk.W, pady=(7, 0))
 
         sequence.columnconfigure(0, weight=1)
@@ -1498,6 +1502,11 @@ class AngleViewer(tk.Tk):
         if self._send(CMD_TRACK_INPUT, payload):
             self.track_status_var.set(f"误差PID：已发送主误差{primary:.2f}，内环反馈{secondary:.2f}")
 
+    def send_track_direction(self):
+        reverse = 1 if self.track_reverse_var.get() else 0
+        if self._send(CMD_TRACK_DIRECTION, struct.pack("<B", reverse)):
+            self.track_status_var.set(f"误差PID：误差方向已设为{'反向' if reverse else '正向'}")
+
     def send_track_defaults(self):
         if self._send(CMD_TRACK_DEFAULT):
             self.track_status_var.set("误差PID：已发送恢复默认请求")
@@ -1671,11 +1680,12 @@ class AngleViewer(tk.Tk):
                 if len(payload) >= 66:
                     multi_turn_angle = struct.unpack("<i", payload[62:66])[0] / 100.0
                 motion_profile = payload[66] if len(payload) >= 67 else None
+                tracking_reverse = payload[67] if len(payload) >= 68 else None
                 extended = (board_mode, sensor_flags, temp_cdeg / 100.0, rpm_x10 / 10.0,
                             track_mode, track_freq, track_speed, track_accel,
                             primary_x100 / 100.0, secondary_x100 / 100.0,
                             track_output, chopper_mode, position_state, multi_turn_angle,
-                            motion_profile)
+                            motion_profile, tracking_reverse)
             if len(payload) >= 59 and payload[58] in (0, 1):
                 detected_role = "Debug" if payload[58] else "Error"
                 if self.interface_role_var.get() != detected_role:
@@ -1717,9 +1727,12 @@ class AngleViewer(tk.Tk):
             scales = (1000.0, 1000.0, 1000.0, 100.0, 1.0, 1.0, 1000.0, 1000.0, 1000.0)
             for var, value, scale in zip(advanced_vars, advanced, scales):
                 var.set(f"{value / scale:g}")
+            if len(payload) >= 60:
+                self.track_reverse_var.set(payload[59] != 0)
             self.track_status_var.set(
                 f"误差PID：{TRACK_MODE_NAMES.get(mode, '未知')}，速度{speed_pct}%={speed_pct * 50}，"
-                f"加速度{accel_pct}%={accel_pct * 100}，{frequency}kHz"
+                f"加速度{accel_pct}%={accel_pct * 100}，{frequency}kHz，"
+                f"误差{'反向' if self.track_reverse_var.get() else '正向'}"
             )
             return
         if payload:
@@ -1755,6 +1768,8 @@ class AngleViewer(tk.Tk):
             elif cmd in (CMD_TRACK_CONFIG, CMD_TRACK_PID, CMD_TRACK_ADVANCED,
                           CMD_TRACK_INPUT, CMD_TRACK_DEFAULT, CMD_TRACK_QUERY):
                 self.track_status_var.set(f"误差PID：{text}")
+            elif cmd == CMD_TRACK_DIRECTION:
+                self.track_status_var.set(f"误差PID：误差方向 {'反向' if self.track_reverse_var.get() else '正向'}，{text}")
             elif cmd == CMD_CHOPPER_MODE:
                 self.chopper_status_var.set(f"斩波模式：{text}")
             elif cmd == CMD_MOTION_PROFILE:
@@ -1807,7 +1822,7 @@ class AngleViewer(tk.Tk):
                 f"Deadband={deadband:.3f}, Accel={accel_text}"
             )
         if extended is not None:
-            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state, multi_turn_angle, motion_profile = extended
+            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state, multi_turn_angle, motion_profile, tracking_reverse = extended
             self.board_mode_var.set(BOARD_MODE_NAMES.get(board_mode, f"未知{board_mode}"))
             if sensor_flags & 0x01:
                 suffix = " 关断" if sensor_flags & 0x04 else (" 警告" if sensor_flags & 0x02 else "")
@@ -1833,6 +1848,8 @@ class AngleViewer(tk.Tk):
                 motion_name = MOTION_PROFILE_NAMES.get(motion_profile, f"未知{motion_profile}")
                 self.motion_profile_var.set(motion_name)
                 self.motion_profile_status_var.set(f"曲线：当前 {motion_name}")
+            if tracking_reverse is not None:
+                self.track_reverse_var.set(tracking_reverse != 0)
             self.driver_status_var.set(
                 f"实际驱动状态：{MODE_NAMES.get(mode, '未知')} | {self.current_microsteps}细分 | {chopper_name}"
             )

@@ -7,6 +7,26 @@ the first Query response.
 The firmware command interface uses this binary protocol only. The PC tuning
 tool and MCU/Linux SDK use the same frame format.
 
+## Visual Error Fast Path
+
+When the DIP switch is `11` (UART mode) and the drive is in built-in error PID
+mode, Error UART / USART2 also accepts a newline-delimited ASCII error value.
+This is intended for a vision module, not for the PC tuning tool:
+
+```text
+-123.45\n
+```
+
+- Accepted format: signed decimal, for example `0\n`, `42\r\n`, or `-18.5\n`.
+- Range: `-10000.0` to `+10000.0`.
+- No CRC and no acknowledgement are used; the newline is the frame boundary.
+- Each valid line directly refreshes the tracking PID input. A 60 fps vision
+  source is therefore sufficient; firmware PID continues at its configured
+  frequency between frames and stops on input timeout.
+- `0x1F Tracking direction`: request `u8 reverse` (`0=normal`, `1=reverse`),
+  response `status`. This is normally sent through Debug UART by the upper
+  computer's `误差反向` checkbox.
+
 ## Frame
 
 Request:

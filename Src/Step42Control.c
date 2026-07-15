@@ -124,6 +124,7 @@ static uint8_t thermal_lockout = 0U;
 static uint8_t stall_fault = 0U;
 static uint16_t stall_elapsed_ms = 0U;
 static uint8_t external_task_marked = 0U;
+static uint8_t tracking_error_reverse = 0U;
 static uint8_t program_mode = 0U;
 static uint8_t program_running = 0U;
 static uint8_t program_count = 0U;
@@ -1672,7 +1673,21 @@ void Step42Control_SetTrackingInput(float primary_error, float secondary_feedbac
   {
     Step42Control_SetUserEnable(1U);
   }
+  if (tracking_error_reverse != 0U)
+  {
+    primary_error = -primary_error;
+  }
   Step42Tracking_SetInput(primary_error, secondary_feedback);
+}
+
+void Step42Control_SetTrackingDirection(uint8_t reverse)
+{
+  tracking_error_reverse = (reverse != 0U) ? 1U : 0U;
+}
+
+uint8_t Step42Control_GetTrackingDirection(void)
+{
+  return tracking_error_reverse;
 }
 
 void Step42Control_ResetTrackingDefaults(void)

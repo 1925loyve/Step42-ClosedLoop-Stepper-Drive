@@ -9,6 +9,8 @@
 #define STATUS_STREAM_INTERVAL_MS (50UL)
 #define CTRL_RX_BUFFER_SIZE (256U)
 #define CTRL_RX_BUFFER_MASK (CTRL_RX_BUFFER_SIZE - 1U)
+#define VISION_ERROR_LINE_MAX (20U)
+#define VISION_ERROR_ABS_LIMIT (10000.0f)
 
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart3;
@@ -32,6 +34,8 @@ static volatile uint32_t debug_tx_pause_until_ms = 0U;
 static volatile uint32_t debug_raw_last_tx_ms = 0U;
 static volatile uint32_t debug_rx_count = 0U;
 static uint8_t debug_stream_enable = 0U;
+static char vision_error_line[VISION_ERROR_LINE_MAX];
+static uint8_t vision_error_line_len = 0U;
 
 static void Ctrl_SendBytes(UART_HandleTypeDef *huart, uint8_t *buf, uint8_t len)
 {
@@ -113,7 +117,7 @@ static int32_t Ctrl_ClampI32(float value)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[66];
+  uint8_t resp[68];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -186,6 +190,7 @@ void Step42Comms_SendQuery(uint8_t seq)
   Ctrl_WriteI32(resp, 62U,
                 Ctrl_ClampI32(Step42Control_GetMultiTurnAngleDeg() * 100.0f));
   resp[66] = Step42Control_GetMotionProfile();
+  resp[67] = Step42Control_GetTrackingDirection();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -222,7 +227,7 @@ static void Step42Comms_SendTelemetry(void)
 
 static void Step42Comms_SendTrackingQuery(uint8_t seq)
 {
-  uint8_t resp[59];
+  uint8_t resp[60];
   const Step42TrackingConfig_t *cfg = Step42Control_GetTrackingConfig();
 
   resp[0] = CTRL_STATUS_OK;
@@ -248,6 +253,7 @@ static void Step42Comms_SendTrackingQuery(uint8_t seq)
   Step42Slave_WriteU16(resp, 53U, (uint16_t)(cfg->single.deadband * 1000.0f));
   Step42Slave_WriteU16(resp, 55U, (uint16_t)(cfg->outer.deadband * 1000.0f));
   Step42Slave_WriteU16(resp, 57U, (uint16_t)(cfg->inner.deadband * 1000.0f));
+  resp[59] = Step42Control_GetTrackingDirection();
   Ctrl_SendFrame(CTRL_CMD_TRACK_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -833,6 +839,23 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_TRACK_DIRECTION)
+  {
+    if (len != 1U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (payload[0] > 1U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Step42Control_SetTrackingDirection(payload[0]);
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
   if (cmd == CTRL_CMD_PROGRAM_MODE)
   {
     if (len != 1U)
@@ -935,6 +958,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_QUERY:
   case CTRL_CMD_CHOPPER_MODE:
   case CTRL_CMD_MOTION_PROFILE:
+  case CTRL_CMD_TRACK_DIRECTION:
   case CTRL_CMD_PROGRAM_MODE:
   case CTRL_CMD_PROGRAM_STEP:
   case CTRL_CMD_PROGRAM_SAVE:
@@ -947,12 +971,112 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   }
 }
 
+static uint8_t Ctrl_ParseVisionError(const char *text, uint8_t len, float *error)
+{
+  uint8_t index = 0U;
+  uint8_t digit_seen = 0U;
+  uint8_t decimal_seen = 0U;
+  float value = 0.0f;
+  float scale = 0.1f;
+  float sign = 1.0f;
+
+  if ((text == 0) || (error == 0) || (len == 0U))
+  {
+    return 0U;
+  }
+  if ((text[index] == '+') || (text[index] == '-'))
+  {
+    sign = (text[index] == '-') ? -1.0f : 1.0f;
+    index++;
+  }
+  for (; index < len; index++)
+  {
+    char ch = text[index];
+
+    if ((ch >= '0') && (ch <= '9'))
+    {
+      digit_seen = 1U;
+      if (decimal_seen == 0U)
+      {
+        value = value * 10.0f + (float)(ch - '0');
+      }
+      else
+      {
+        value += (float)(ch - '0') * scale;
+        scale *= 0.1f;
+      }
+    }
+    else if ((ch == '.') && (decimal_seen == 0U))
+    {
+      decimal_seen = 1U;
+    }
+    else
+    {
+      return 0U;
+    }
+  }
+  value *= sign;
+  if ((digit_seen == 0U) || (value > VISION_ERROR_ABS_LIMIT) ||
+      (value < -VISION_ERROR_ABS_LIMIT))
+  {
+    return 0U;
+  }
+  *error = value;
+  return 1U;
+}
+
+static void Ctrl_ProcessVisionErrorByte(uint8_t value)
+{
+  float error;
+
+  if (value == '\r')
+  {
+    return;
+  }
+  if (value == '\n')
+  {
+    if ((Step42Control_GetMode() == CTRL_MODE_TRACK_PID) &&
+        (Ctrl_ParseVisionError(vision_error_line, vision_error_line_len, &error) != 0U))
+    {
+      Step42Control_SetTrackingInput(error, 0.0f);
+      Step42Control_MarkExternalTask();
+    }
+    vision_error_line_len = 0U;
+    return;
+  }
+  if (((value >= '0') && (value <= '9')) || (value == '+') ||
+      (value == '-') || (value == '.'))
+  {
+    if (vision_error_line_len < (VISION_ERROR_LINE_MAX - 1U))
+    {
+      vision_error_line[vision_error_line_len++] = (char)value;
+    }
+    else
+    {
+      vision_error_line_len = 0U;
+    }
+  }
+  else
+  {
+    vision_error_line_len = 0U;
+  }
+}
+
 static void Ctrl_ProcessRxByte(Step42Slave_Parser_t *parser,
                                uint8_t ch,
                                UART_HandleTypeDef *huart,
                                uint8_t restricted)
 {
   Step42Slave_Frame_t frame;
+
+  /* USART2 accepts newline-delimited visual error only while idle. Binary
+     control frames keep their original A5 5A parser and are never mixed. */
+  if ((huart == &huart2) &&
+      (Step42BoardMode_Get() == STEP42_BOARD_UART) &&
+      (parser->state == 0U) && (ch != CTRL_SOF1))
+  {
+    Ctrl_ProcessVisionErrorByte(ch);
+  }
 
   if (Step42Slave_ProcessByte(parser, ch, &frame) != 0U)
   {
@@ -1021,6 +1145,7 @@ void Step42Comms_Init(void)
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
   debug_stream_enable = 0U;
+  vision_error_line_len = 0U;
   response_interface = 0U;
   stream_uart = &huart3;
   error_rx_head = error_rx_tail = 0U;
@@ -1033,6 +1158,7 @@ void Step42Comms_OnBoardModeChanged(void)
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
   debug_stream_enable = 0U;
+  vision_error_line_len = 0U;
   response_interface = 0U;
   stream_uart = &huart3;
   debug_tx_pause_until_ms = 0U;

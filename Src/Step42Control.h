@@ -84,6 +84,8 @@ uint8_t Step42Control_SetTrackingAdvanced(float filter_alpha,
                                           float outer_deadband,
                                           float inner_deadband);
 void Step42Control_SetTrackingInput(float primary_error, float secondary_feedback);
+void Step42Control_SetTrackingDirection(uint8_t reverse);
+uint8_t Step42Control_GetTrackingDirection(void);
 void Step42Control_ResetTrackingDefaults(void);
 void Step42Control_SetThermalLockout(uint8_t lockout);
 

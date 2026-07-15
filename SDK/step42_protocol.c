@@ -581,6 +581,20 @@ uint16_t Step42_BuildSetMotionProfile(uint8_t *buf, uint16_t max_len,
                              payload, sizeof(payload));
 }
 
+uint16_t Step42_BuildSetTrackingDirection(uint8_t *buf, uint16_t max_len,
+                                          uint8_t seq, uint8_t reverse)
+{
+    uint8_t payload[1];
+
+    if (reverse > 1U)
+    {
+        return 0U;
+    }
+    payload[0] = reverse;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_DIRECTION, seq,
+                             payload, sizeof(payload));
+}
+
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status)
 {
     if ((response == 0) || (status == 0) || (response->len < 1U))
@@ -619,6 +633,7 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->program_running = 0U;
     status->program_count = 0U;
     status->motion_profile = STEP42_PROFILE_TRAPEZOID;
+    status->tracking_reverse = 0U;
     if (response->len >= 32U)
     {
         status->kp = ((float)Step42_ReadI32(response->payload, 10U)) / 100.0f;
@@ -687,6 +702,10 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     if (response->len >= 67U)
     {
         status->motion_profile = response->payload[66U];
+    }
+    if (response->len >= 68U)
+    {
+        status->tracking_reverse = response->payload[67U];
     }
     return 0;
 }
