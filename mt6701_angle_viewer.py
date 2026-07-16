@@ -798,7 +798,7 @@ class AngleViewer(tk.Tk):
             row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Button(tracking_base, text="读取", command=self.send_track_query).grid(
             row=2, column=2, sticky="ew", padx=(5, 2), pady=(6, 0))
-        ttk.Button(tracking_base, text="PID存Flash", command=self.send_save_runtime_config).grid(
+        ttk.Button(tracking_base, text="追踪PID存Flash", command=self.send_save_runtime_config).grid(
             row=2, column=3, sticky="ew", padx=(2, 0), pady=(6, 0))
 
         tracking_loops = ttk.LabelFrame(tracking, text="PID 环参数", padding=6)
@@ -1429,7 +1429,7 @@ class AngleViewer(tk.Tk):
 
     def send_save_runtime_config(self):
         if self._send(CMD_SAVE_RUNTIME_CONFIG):
-            self.operation_var.set("正在保存当前闭环位置与内置误差 PID 参数到 Flash，请勿断电。")
+            self.operation_var.set("正在保存零点/回零方式与内置追踪 PID 参数到 Flash，请勿断电。")
 
     def send_speed_value(self):
         if self.current_mode != MODE_OPEN_SPEED:

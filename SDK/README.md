@@ -176,3 +176,13 @@ MS1 MS2 = 0 1  PWM input
 MS1 MS2 = 1 0  CAN
 MS1 MS2 = 0 0  Factory Debug UART
 ```
+
+## PWM Position Input
+
+With the DIP switches at `0 1`, the board accepts a servo-style PWM position
+input on `PA15 / TIM2_CH1`. Use a 50 Hz signal with a 1000 to 2000 us high
+pulse width: 1000 us maps to the stored software zero and 2000 us maps to the
+same single-turn zero point. Intermediate widths map linearly across 0 to 360
+degrees. PWM always enters closed-position mode with 32 microsteps and the
+firmware default position PID parameters; temporary UART position tuning is
+not retained for PWM operation.

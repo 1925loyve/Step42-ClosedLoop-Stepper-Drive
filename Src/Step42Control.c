@@ -282,13 +282,8 @@ static void Config_ApplyRuntime(void)
     return;
   }
 
-  Step42Control_SetPositionPID(loaded_flash_config.position_kp,
-                                loaded_flash_config.position_ki,
-                                loaded_flash_config.position_kd,
-                                loaded_flash_config.position_limit,
-                                loaded_flash_config.position_deadband);
-  closed_position_accel = loaded_flash_config.closed_accel;
-
+  /* Closed-position tuning is deliberately session-only.  Every boot starts
+     with the known 32-microstep defaults, keeping PWM behavior predictable. */
   tracking = &loaded_flash_config.tracking;
   if (Step42Tracking_SetBasic(tracking->mode,
                                tracking->speed_percent,
@@ -340,12 +335,7 @@ static uint8_t Config_Save(void)
   image.cfg.zero_valid = zero_valid;
   image.cfg.zero_cdeg = (int32_t)(zero_offset_deg * 100.0f + 0.5f);
   image.cfg.home_mode = home_mode;
-  Step42Control_GetPositionPID(&image.cfg.position_kp,
-                               &image.cfg.position_ki,
-                               &image.cfg.position_kd,
-                               &image.cfg.position_limit,
-                               &image.cfg.position_deadband);
-  image.cfg.closed_accel = closed_position_accel;
+  /* Position PID and its acceleration are intentionally not persisted. */
   image.cfg.tracking = *tracking;
   image.cfg.tracking_reverse = tracking_error_reverse;
   image.cfg.crc = Config_CalcCrc(&image.cfg);
@@ -1234,6 +1224,33 @@ void Step42Control_MoveToAngleByMode(float target_angle)
   {
     Move_ToAbsoluteAngle(target_angle);
   }
+}
+
+void Step42Control_MoveToPwmAngle(float target_angle)
+{
+  float turns;
+  int32_t nearest_turn;
+
+  if (control_mode != CTRL_MODE_CLOSED_POSITION)
+  {
+    return;
+  }
+
+  /* PWM is a single-turn cyclic command: 0 deg and 360 deg are equivalent.
+     Choose the closest equivalent target so crossing the zero point never
+     creates an accidental near-full-turn correction. */
+  target_angle = Normalize360(target_angle);
+  turns = (mt6701_unwrapped_deg - target_angle) / 360.0f;
+  nearest_turn = (turns >= 0.0f) ?
+                 (int32_t)(turns + 0.5f) : (int32_t)(turns - 0.5f);
+  Move_ToAbsoluteAngle(target_angle + ((float)nearest_turn * 360.0f));
+}
+
+void Step42Control_EnterPwmMode(void)
+{
+  (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
+  /* PWM must never inherit temporary UART position-tuning changes. */
+  (void)Step42Control_SetMicrosteps(32U);
 }
 
 uint8_t Step42Control_MoveRelativeAngleByMode(float delta_angle)
