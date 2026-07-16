@@ -1246,13 +1246,6 @@ void Step42Control_MoveToPwmAngle(float target_angle)
   Move_ToAbsoluteAngle(target_angle + ((float)nearest_turn * 360.0f));
 }
 
-void Step42Control_EnterPwmMode(void)
-{
-  (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
-  /* PWM must never inherit temporary UART position-tuning changes. */
-  (void)Step42Control_SetMicrosteps(32U);
-}
-
 uint8_t Step42Control_MoveRelativeAngleByMode(float delta_angle)
 {
   float target_angle;

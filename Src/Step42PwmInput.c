@@ -70,7 +70,7 @@ void Step42PwmInput_Process(void)
     {
         if (pwm_started == 0U)
         {
-            Step42Control_EnterPwmMode();
+            Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
             HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
             HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
             pwm_started = 1U;
