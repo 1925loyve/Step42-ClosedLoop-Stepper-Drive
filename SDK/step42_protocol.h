@@ -45,6 +45,7 @@ extern "C" {
 #define STEP42_CMD_PROGRAM_STAGE    (0x1DU)
 #define STEP42_CMD_MOTION_PROFILE   (0x1EU)
 #define STEP42_CMD_TRACK_DIRECTION  (0x1FU)
+#define STEP42_CMD_SAVE_RUNTIME_CONFIG (0x20U)
 
 #define STEP42_PROFILE_TRAPEZOID    (0x00U)
 #define STEP42_PROFILE_S_CURVE      (0x01U)
@@ -218,6 +219,7 @@ uint16_t Step42_BuildSetStream(uint8_t *buf, uint16_t max_len, uint8_t seq, uint
 uint16_t Step42_BuildQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode);
 uint16_t Step42_BuildStop(uint8_t *buf, uint16_t max_len, uint8_t seq);
+uint16_t Step42_BuildSaveRuntimeConfig(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildTrackConfig(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                 uint8_t mode, uint8_t speed_percent,
                                 uint8_t accel_percent, uint8_t frequency_khz);

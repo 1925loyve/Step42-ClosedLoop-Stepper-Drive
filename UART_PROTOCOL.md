@@ -79,6 +79,7 @@ Status byte:
 | `0x1B` | Run program | none | `status`; requires program mode and motor enabled |
 | `0x1C` | Program query | none | `status, program_mode, program_running, program_count` |
 | `0x1D` | Stage program in RAM | `u8 count`, maximum 8 | `status`; makes uploaded steps runnable without a Flash erase |
+| `0x20` | Save runtime configuration | none | `status`; saves closed-position PID/acceleration plus all tracking PID settings to Flash |
 
 Control modes:
 
@@ -116,6 +117,11 @@ erase/write operation. This keeps normal test runs away from Flash endurance.
 After power-up, with the motor enabled, a KEY1 long press starts the valid
 stored program without requiring program mode. While that offline program is
 running, external motion commands are still denied until it completes or stops.
+
+Protocol v13 adds `0x20 Save runtime configuration`. It is an explicit Flash
+operation: normal PID writes update RAM only. The command persists closed
+position PID and acceleration, tracking mode/PID/advanced settings, and error
+direction. Do not issue it while the motor is moving.
 
 Protocol v9 extends home mode: `0=nearest single-turn zero`, `1=positive
 single-turn zero`, `2=negative single-turn zero`, `3=multi-turn absolute zero`.

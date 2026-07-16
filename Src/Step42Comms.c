@@ -858,6 +858,17 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_SAVE_RUNTIME_CONFIG)
+  {
+    if (len != 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, Step42Control_SaveRuntimeConfig());
+    return;
+  }
+
   if (cmd == CTRL_CMD_PROGRAM_MODE)
   {
     if (len != 1U)
@@ -961,6 +972,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_CHOPPER_MODE:
   case CTRL_CMD_MOTION_PROFILE:
   case CTRL_CMD_TRACK_DIRECTION:
+  case CTRL_CMD_SAVE_RUNTIME_CONFIG:
   case CTRL_CMD_PROGRAM_MODE:
   case CTRL_CMD_PROGRAM_STEP:
   case CTRL_CMD_PROGRAM_SAVE:

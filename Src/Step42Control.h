@@ -52,6 +52,7 @@ uint8_t Step42Control_SetClosedAccel(float accel);
 uint8_t Step42Control_SetMotionProfile(uint8_t profile);
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband);
 void Step42Control_GetPositionPID(float *kp, float *ki, float *kd, float *output_limit, float *deadband);
+uint8_t Step42Control_SaveRuntimeConfig(void);
 uint8_t Step42Control_SetHomeMode(uint8_t mode);
 uint8_t Step42Control_SetCurrentZero(void);
 uint8_t Step42Control_Home(uint8_t mode);

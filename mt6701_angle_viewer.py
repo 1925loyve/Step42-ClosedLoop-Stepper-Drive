@@ -59,6 +59,7 @@ CMD_PROGRAM_QUERY = 0x1C
 CMD_PROGRAM_STAGE = 0x1D
 CMD_MOTION_PROFILE = 0x1E
 CMD_TRACK_DIRECTION = 0x1F
+CMD_SAVE_RUNTIME_CONFIG = 0x20
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -307,6 +308,7 @@ class AngleViewer(tk.Tk):
         self.interface_role_var = tk.StringVar(value="Error")
         self.auto_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="等待串口")
+        self.operation_var = tk.StringVar(value="等待操作。")
         self.raw_var = tk.StringVar(value="--")
         self.abs_deg_var = tk.StringVar(value="--")
         self.deg_var = tk.StringVar(value="--")
@@ -371,6 +373,9 @@ class AngleViewer(tk.Tk):
         self.track_single_dead_var = tk.StringVar(value="0.08")
         self.track_outer_dead_var = tk.StringVar(value="0.08")
         self.track_inner_dead_var = tk.StringVar(value="0.08")
+        self.dynamic_gain_enabled_var = tk.BooleanVar(value=False)
+        self.prediction_enabled_var = tk.BooleanVar(value=False)
+        self.advanced_visible_var = tk.BooleanVar(value=False)
         self.sequence_type_var = tk.StringVar(value="位置移动")
         self.sequence_param_vars = {}
         self.sequence_param_frame = None
@@ -380,6 +385,7 @@ class AngleViewer(tk.Tk):
         self.sequence_tree = None
 
         self._build_ui()
+        self._update_advanced_control_states()
         self.interface_role_var.trace_add("write", self._on_interface_role_changed)
         self._on_interface_role_changed()
         self._sequence_command_changed()
@@ -641,7 +647,8 @@ class AngleViewer(tk.Tk):
                                        width=12, state="readonly")
         self.port_combo.grid(row=0, column=1, padx=(4, 8))
         ttk.Label(connection, text="波特率").grid(row=0, column=2, sticky=tk.W)
-        ttk.Entry(connection, textvariable=self.baud_var, width=9).grid(row=0, column=3, padx=(4, 8))
+        ttk.Combobox(connection, textvariable=self.baud_var, values=("115200",),
+                     state="readonly", width=9).grid(row=0, column=3, padx=(4, 8))
         ttk.Label(connection, text="接口").grid(row=0, column=4, sticky=tk.W)
         ttk.Label(connection, textvariable=self.interface_role_var,
                   width=7).grid(row=0, column=5, padx=(4, 6), sticky=tk.W)
@@ -719,8 +726,10 @@ class AngleViewer(tk.Tk):
         ttk.Button(pid_actions, text="应用运行参数", command=self.apply_position_params).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(pid_actions, text="填入默认参数", command=self.fill_default_motion_params).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
+        ttk.Button(position_pid, text="保存全部 PID 至 Flash", command=self.send_save_runtime_config).grid(
+            row=4, column=0, columnspan=4, sticky="ew", pady=(5, 0))
         ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=185).grid(
-            row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+            row=5, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
@@ -768,6 +777,11 @@ class AngleViewer(tk.Tk):
             row=1, column=0, columnspan=3, sticky="ew", pady=(5, 0))
         ttk.Label(absolute, textvariable=self.angle_status_var).grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(5, 0))
 
+        operation = ttk.LabelFrame(test_motor, text="操作结果", padding=6)
+        operation.pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(operation, textvariable=self.operation_var, wraplength=360,
+                  justify=tk.LEFT).pack(anchor=tk.W, fill=tk.X)
+
         tracking_base = ttk.LabelFrame(tracking, text="基础配置", padding=6)
         tracking_base.pack(fill=tk.X)
         ttk.Label(tracking_base, text="控制结构").grid(row=0, column=0, sticky=tk.W)
@@ -787,7 +801,8 @@ class AngleViewer(tk.Tk):
             row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Button(tracking_base, text="读取", command=self.send_track_query).grid(
             row=2, column=2, sticky="ew", padx=(5, 2), pady=(6, 0))
-        ttk.Button(tracking_base, text="高级", command=self.open_track_advanced).grid(
+        self.advanced_toggle_button = ttk.Button(tracking_base, text="高级参数 ▼", command=self.toggle_track_advanced)
+        self.advanced_toggle_button.grid(
             row=2, column=3, sticky="ew", padx=(2, 0), pady=(6, 0))
 
         tracking_loops = ttk.LabelFrame(tracking, text="PID 环参数", padding=6)
@@ -814,7 +829,40 @@ class AngleViewer(tk.Tk):
         ttk.Button(tracking_input, text="发送", command=self.send_track_input).grid(row=0, column=4)
         ttk.Checkbutton(tracking_input, text="误差反向", variable=self.track_reverse_var,
                         command=self.send_track_direction).grid(row=0, column=5, padx=(8, 0))
-        ttk.Label(tracking, textvariable=self.track_status_var, wraplength=300).pack(anchor=tk.W, pady=(7, 0))
+
+        self.tracking_advanced = ttk.LabelFrame(tracking, text="高级参数", padding=6)
+        advanced = self.tracking_advanced
+        ttk.Label(advanced, text="滤波 α (0.01~1)").grid(row=0, column=0, sticky=tk.W)
+        ttk.Entry(advanced, textvariable=self.track_filter_var, width=7).grid(row=0, column=1, padx=(3, 8))
+        ttk.Label(advanced, text="超时 ms (20~5000)").grid(row=0, column=2, sticky=tk.W)
+        ttk.Entry(advanced, textvariable=self.track_timeout_var, width=7).grid(row=0, column=3, padx=(3, 0))
+
+        ttk.Checkbutton(advanced, text="启用目标预测", variable=self.prediction_enabled_var,
+                        command=self._update_advanced_control_states).grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        ttk.Label(advanced, text="预测 ms (0~200)").grid(row=1, column=1, sticky=tk.W, pady=(5, 0))
+        self.prediction_entry = ttk.Entry(advanced, textvariable=self.track_prediction_var, width=7)
+        self.prediction_entry.grid(row=1, column=2, sticky=tk.W, padx=(3, 8), pady=(5, 0))
+
+        ttk.Checkbutton(advanced, text="启用动态增益", variable=self.dynamic_gain_enabled_var,
+                        command=self._update_advanced_control_states).grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        ttk.Label(advanced, text="最小/最大 (0.1~10)").grid(row=2, column=1, sticky=tk.W, pady=(5, 0))
+        self.dynamic_gain_min_entry = ttk.Entry(advanced, textvariable=self.track_gain_min_var, width=6)
+        self.dynamic_gain_min_entry.grid(row=2, column=2, sticky=tk.W, padx=(3, 2), pady=(5, 0))
+        self.dynamic_gain_max_entry = ttk.Entry(advanced, textvariable=self.track_gain_max_var, width=6)
+        self.dynamic_gain_max_entry.grid(row=2, column=3, sticky=tk.W, padx=(0, 8), pady=(5, 0))
+        ttk.Label(advanced, text="满增益误差 (0.01~655.35)").grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        self.dynamic_full_error_entry = ttk.Entry(advanced, textvariable=self.track_full_error_var, width=8)
+        self.dynamic_full_error_entry.grid(row=3, column=2, sticky=tk.W, padx=(3, 8), pady=(5, 0))
+
+        for column, text in enumerate(("单环死区", "外环死区", "内环死区")):
+            ttk.Label(advanced, text=f"{text} (0~65.535)").grid(row=4, column=column, sticky=tk.W, pady=(5, 0))
+        ttk.Entry(advanced, textvariable=self.track_single_dead_var, width=7).grid(row=5, column=0, sticky=tk.W, pady=(2, 0))
+        ttk.Entry(advanced, textvariable=self.track_outer_dead_var, width=7).grid(row=5, column=1, sticky=tk.W, pady=(2, 0))
+        ttk.Entry(advanced, textvariable=self.track_inner_dead_var, width=7).grid(row=5, column=2, sticky=tk.W, pady=(2, 0))
+        ttk.Button(advanced, text="写入高级参数", command=self.send_track_advanced).grid(
+            row=5, column=3, sticky="ew", pady=(2, 0))
+        self.track_status_label = ttk.Label(tracking, textvariable=self.track_status_var, wraplength=300)
+        self.track_status_label.pack(anchor=tk.W, pady=(7, 0))
 
         sequence.columnconfigure(0, weight=1)
         command_values = ("位置移动", "速度运行", "延时", "回零", "设置细分", "设置斩波", "运行内置PID", "停止电机")
@@ -1382,6 +1430,10 @@ class AngleViewer(tk.Tk):
                 f"Limit={self.limit_var.get()}, Deadband={self.deadband_var.get()}, Accel={accel} 已应用"
             )
 
+    def send_save_runtime_config(self):
+        if self._send(CMD_SAVE_RUNTIME_CONFIG):
+            self.operation_var.set("正在保存当前闭环位置与内置误差 PID 参数到 Flash，请勿断电。")
+
     def send_speed_value(self):
         if self.current_mode != MODE_OPEN_SPEED:
             self.speed_status_var.set("速度：当前不是速度模式，先设置为速度模式")
@@ -1517,51 +1569,68 @@ class AngleViewer(tk.Tk):
 
     def send_track_advanced(self):
         try:
-            values = [
-                int(round(float(self.track_filter_var.get()) * 1000)),
-                int(round(float(self.track_gain_min_var.get()) * 1000)),
-                int(round(float(self.track_gain_max_var.get()) * 1000)),
-                int(round(float(self.track_full_error_var.get()) * 100)),
-                int(round(float(self.track_prediction_var.get()))),
-                int(round(float(self.track_timeout_var.get()))),
-                int(round(float(self.track_single_dead_var.get()) * 1000)),
-                int(round(float(self.track_outer_dead_var.get()) * 1000)),
-                int(round(float(self.track_inner_dead_var.get()) * 1000)),
-            ]
+            filter_alpha = float(self.track_filter_var.get())
+            gain_min = float(self.track_gain_min_var.get())
+            gain_max = float(self.track_gain_max_var.get())
+            full_error = float(self.track_full_error_var.get())
+            prediction_ms = float(self.track_prediction_var.get())
+            timeout_ms = int(round(float(self.track_timeout_var.get())))
+            deadbands = [float(self.track_single_dead_var.get()),
+                         float(self.track_outer_dead_var.get()),
+                         float(self.track_inner_dead_var.get())]
         except ValueError:
             self.track_status_var.set("误差PID：高级参数格式错误")
             return
-        if any(value < 0 or value > 65535 for value in values):
-            self.track_status_var.set("误差PID：高级参数超出协议范围")
+        if not (0.01 <= filter_alpha <= 1.0 and 20 <= timeout_ms <= 5000 and
+                all(0.0 <= value <= 65.535 for value in deadbands)):
+            self.track_status_var.set("误差PID：滤波0.01~1，超时20~5000，死区0~65.535")
             return
+        if self.dynamic_gain_enabled_var.get():
+            if not (0.1 <= gain_min <= gain_max <= 10.0 and 0.01 <= full_error <= 655.35):
+                self.track_status_var.set("误差PID：动态增益最小/最大为0.1~10，满增益误差为0.01~655.35")
+                return
+        else:
+            gain_min = gain_max = 1.0
+        if self.prediction_enabled_var.get():
+            if not (0.0 <= prediction_ms <= 200.0):
+                self.track_status_var.set("误差PID：预测时间范围为0~200ms")
+                return
+        else:
+            prediction_ms = 0.0
+        values = [int(round(filter_alpha * 1000)),
+                  int(round(gain_min * 1000)),
+                  int(round(gain_max * 1000)),
+                  int(round(full_error * 100)),
+                  int(round(prediction_ms)), timeout_ms,
+                  *(int(round(value * 1000)) for value in deadbands)]
         if self._send(CMD_TRACK_ADVANCED, struct.pack("<9H", *values)):
-            self.track_status_var.set("误差PID：已发送高级参数")
+            self.track_status_var.set("误差PID：高级参数已写入运行时配置")
 
-    def open_track_advanced(self):
-        window = tk.Toplevel(self)
-        window.title("误差PID高级参数")
-        window.resizable(False, False)
-        fields = [
-            ("误差滤波系数 0~1", self.track_filter_var),
-            ("动态增益最小值", self.track_gain_min_var),
-            ("动态增益最大值", self.track_gain_max_var),
-            ("达到最大增益的误差", self.track_full_error_var),
-            ("预测时间 ms", self.track_prediction_var),
-            ("输入超时 ms", self.track_timeout_var),
-            ("单环死区", self.track_single_dead_var),
-            ("外环死区", self.track_outer_dead_var),
-            ("内环死区", self.track_inner_dead_var),
-        ]
-        for row, (label, var) in enumerate(fields):
-            ttk.Label(window, text=label).grid(row=row, column=0, padx=12, pady=6, sticky=tk.W)
-            ttk.Entry(window, textvariable=var, width=14).grid(row=row, column=1, padx=12, pady=6)
-        ttk.Button(window, text="写入高级参数", command=self.send_track_advanced).grid(
-            row=len(fields), column=0, columnspan=2, padx=12, pady=12
-        )
+    def toggle_track_advanced(self):
+        if self.advanced_visible_var.get():
+            self.tracking_advanced.pack_forget()
+            self.advanced_visible_var.set(False)
+            self.advanced_toggle_button.configure(text="高级参数 ▼")
+        else:
+            self.tracking_advanced.pack(fill=tk.X, pady=(8, 0), before=self.track_status_label)
+            self.advanced_visible_var.set(True)
+            self.advanced_toggle_button.configure(text="高级参数 ▲")
+
+    def _update_advanced_control_states(self):
+        gain_state = "normal" if self.dynamic_gain_enabled_var.get() else "disabled"
+        prediction_state = "normal" if self.prediction_enabled_var.get() else "disabled"
+        for entry in getattr(self, "dynamic_gain_min_entry", ()), getattr(self, "dynamic_gain_max_entry", ()), getattr(self, "dynamic_full_error_entry", ()):
+            entry.configure(state=gain_state)
+        if hasattr(self, "prediction_entry"):
+            self.prediction_entry.configure(state=prediction_state)
 
     def _auto_refresh_ports(self):
         self.refresh_ports(auto_connect=True)
         self.after(1000, self._auto_refresh_ports)
+
+    def _report_operation(self, message):
+        """Keep explicit command results visible independently of telemetry."""
+        self.operation_var.set(message)
 
     def _poll_queues(self):
         while True:
@@ -1593,6 +1662,9 @@ class AngleViewer(tk.Tk):
                 self.pending_tx = None
                 self.status_var.set(
                     f"命令0x{timed_out['cmd']:02X}等待响应超时，后续命令已暂停"
+                )
+                self._report_operation(
+                    f"命令 0x{timed_out['cmd']:02X} 未收到响应：请检查拨码模式、接口和接线。"
                 )
                 self.tx_queue.clear()
 
@@ -1727,6 +1799,9 @@ class AngleViewer(tk.Tk):
             scales = (1000.0, 1000.0, 1000.0, 100.0, 1.0, 1.0, 1000.0, 1000.0, 1000.0)
             for var, value, scale in zip(advanced_vars, advanced, scales):
                 var.set(f"{value / scale:g}")
+            self.dynamic_gain_enabled_var.set(advanced[1] != advanced[2])
+            self.prediction_enabled_var.set(advanced[4] != 0)
+            self._update_advanced_control_states()
             if len(payload) >= 60:
                 self.track_reverse_var.set(payload[59] != 0)
             self.track_status_var.set(
@@ -1738,6 +1813,20 @@ class AngleViewer(tk.Tk):
         if payload:
             status = payload[0]
             text = STATUS_NAMES.get(status, f"ERR {status}")
+            command_names = {
+                CMD_ENABLE: "电机使能", CMD_MODE: "工作模式", CMD_STREAM: "数据流",
+                CMD_PID: "闭环位置 PID", CMD_SPEED: "速度指令", CMD_ANGLE: "绝对角度",
+                CMD_RELATIVE_ANGLE: "相对角度", CMD_STOP: "停止电机", CMD_MOVE_STEPS: "脉冲位置",
+                CMD_MICROSTEP: "细分", CMD_CLOSED_ACCEL: "闭环加速度", CMD_HOME_MODE: "回零模式",
+                CMD_SET_ZERO: "设置零点", CMD_HOME: "执行回零", CMD_TRACK_CONFIG: "误差PID基础配置",
+                CMD_TRACK_PID: "误差PID环参数", CMD_TRACK_ADVANCED: "误差PID高级参数",
+                CMD_TRACK_INPUT: "测试误差", CMD_TRACK_DEFAULT: "恢复误差PID默认", CMD_TRACK_DIRECTION: "误差方向",
+                CMD_CHOPPER_MODE: "斩波模式", CMD_MOTION_PROFILE: "加减速曲线",
+                CMD_PROGRAM_MODE: "指令模式", CMD_PROGRAM_STEP: "内部指令", CMD_PROGRAM_STAGE: "写入RAM",
+                CMD_PROGRAM_SAVE: "保存内部指令", CMD_PROGRAM_RUN: "运行内部指令",
+                CMD_SAVE_RUNTIME_CONFIG: "保存 PID 到 Flash",
+            }
+            self._report_operation(f"{command_names.get(cmd, f'命令0x{cmd:02X}')}：{text}")
             if cmd == CMD_ENABLE:
                 self.enable_status_var.set(f"电机：{text}")
             elif cmd == CMD_MODE:
@@ -1774,6 +1863,8 @@ class AngleViewer(tk.Tk):
                 self.chopper_status_var.set(f"斩波模式：{text}")
             elif cmd == CMD_MOTION_PROFILE:
                 self.motion_profile_status_var.set(f"曲线：{text}")
+            elif cmd == CMD_SAVE_RUNTIME_CONFIG:
+                self.pid_status_var.set("PID：已保存到 Flash" if status == 0 else f"PID：保存 Flash {text}")
             elif cmd in (CMD_PROGRAM_MODE, CMD_PROGRAM_STEP, CMD_PROGRAM_STAGE,
                          CMD_PROGRAM_SAVE, CMD_PROGRAM_RUN):
                 self.sequence_status_var.set(f"内部指令：{text}")

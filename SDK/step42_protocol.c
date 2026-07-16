@@ -453,6 +453,11 @@ uint16_t Step42_BuildStop(uint8_t *buf, uint16_t max_len, uint8_t seq)
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_STOP, seq, 0, 0U);
 }
 
+uint16_t Step42_BuildSaveRuntimeConfig(uint8_t *buf, uint16_t max_len, uint8_t seq)
+{
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_SAVE_RUNTIME_CONFIG, seq, 0, 0U);
+}
+
 uint16_t Step42_BuildTrackConfig(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                 uint8_t mode, uint8_t speed_percent,
                                 uint8_t accel_percent, uint8_t frequency_khz)

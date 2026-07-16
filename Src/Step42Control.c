@@ -14,7 +14,7 @@
 #define OPEN_POSITION_MAX_SPEED (2500.0f)
 #define OPEN_POSITION_ACCEL (5000.0f)
 #define STEP42_CFG_MAGIC (0x42323453UL)
-#define STEP42_CFG_VERSION (1UL)
+#define STEP42_CFG_VERSION (2UL)
 #define STEP42_CFG_ADDR (FLASH_BASE + FLASH_SIZE - FLASH_PAGE_SIZE)
 #define STEP42_CFG_FLASH_PAGE (FLASH_PAGE_NB - 1U)
 #define STEP42_PROGRAM_MAGIC (0x50473432UL)
@@ -51,8 +51,27 @@ typedef struct
   uint32_t zero_valid;
   int32_t zero_cdeg;
   uint32_t home_mode;
+  float position_kp;
+  float position_ki;
+  float position_kd;
+  float position_limit;
+  float position_deadband;
+  float closed_accel;
+  Step42TrackingConfig_t tracking;
+  uint32_t tracking_reverse;
+  uint32_t reserved;
   uint32_t crc;
 } Step42FlashConfig_t;
+
+typedef struct
+{
+  uint32_t magic;
+  uint32_t version;
+  uint32_t zero_valid;
+  int32_t zero_cdeg;
+  uint32_t home_mode;
+  uint32_t crc;
+} Step42FlashConfigV1_t;
 
 typedef struct
 {
@@ -131,6 +150,8 @@ static uint8_t program_count = 0U;
 static uint8_t program_ready = 0U;
 static uint8_t program_editing = 0U;
 static uint8_t program_save_armed = 0U;
+static Step42FlashConfig_t loaded_flash_config;
+static uint8_t loaded_flash_config_valid = 0U;
 static Step42ProgramSnapshot_t program_snapshot;
 static uint8_t program_index = 0U;
 static uint8_t program_step_started = 0U;
@@ -215,27 +236,82 @@ static void Program_Load(void)
 static void Config_Load(void)
 {
   const Step42FlashConfig_t *cfg = (const Step42FlashConfig_t *)STEP42_CFG_ADDR;
+  const Step42FlashConfigV1_t *legacy = (const Step42FlashConfigV1_t *)STEP42_CFG_ADDR;
 
-  if ((cfg->magic != STEP42_CFG_MAGIC) ||
-      (cfg->version != STEP42_CFG_VERSION) ||
-      (cfg->crc != Config_CalcCrc(cfg)))
+  loaded_flash_config_valid = 0U;
+
+  if ((cfg->magic == STEP42_CFG_MAGIC) &&
+      (cfg->version == STEP42_CFG_VERSION) &&
+      (cfg->crc == Config_CalcCrc(cfg)))
+  {
+    zero_valid = (cfg->zero_valid != 0UL) ? 1U : 0U;
+    zero_offset_deg = Normalize360(((float)cfg->zero_cdeg) / 100.0f);
+    home_mode = (cfg->home_mode <= CTRL_HOME_MULTI_TURN) ?
+                (uint8_t)cfg->home_mode : CTRL_HOME_NEAREST;
+    memcpy(&loaded_flash_config, cfg, sizeof(loaded_flash_config));
+    loaded_flash_config_valid = 1U;
+    return;
+  }
+
+  /* Preserve zero-point data written by firmware v1, even though PID data
+     did not exist in that old image. */
+  if ((legacy->magic == STEP42_CFG_MAGIC) &&
+      (legacy->version == 1UL) &&
+      (legacy->crc == ConfigV1_CalcCrc(legacy)))
+  {
+    zero_valid = (legacy->zero_valid != 0UL) ? 1U : 0U;
+    zero_offset_deg = Normalize360(((float)legacy->zero_cdeg) / 100.0f);
+    home_mode = (legacy->home_mode <= CTRL_HOME_MULTI_TURN) ?
+                (uint8_t)legacy->home_mode : CTRL_HOME_NEAREST;
+  }
+  else
   {
     zero_valid = 0U;
     zero_offset_deg = 0.0f;
     home_mode = CTRL_HOME_NEAREST;
+  }
+}
+
+static void Config_ApplyRuntime(void)
+{
+  const Step42TrackingConfig_t *tracking;
+
+  if (loaded_flash_config_valid == 0U)
+  {
     return;
   }
 
-  zero_valid = (cfg->zero_valid != 0UL) ? 1U : 0U;
-  zero_offset_deg = Normalize360(((float)cfg->zero_cdeg) / 100.0f);
-  if (cfg->home_mode <= CTRL_HOME_MULTI_TURN)
+  Step42Control_SetPositionPID(loaded_flash_config.position_kp,
+                                loaded_flash_config.position_ki,
+                                loaded_flash_config.position_kd,
+                                loaded_flash_config.position_limit,
+                                loaded_flash_config.position_deadband);
+  closed_position_accel = loaded_flash_config.closed_accel;
+
+  tracking = &loaded_flash_config.tracking;
+  if (Step42Tracking_SetBasic(tracking->mode,
+                               tracking->speed_percent,
+                               tracking->accel_percent,
+                               tracking->frequency_khz) == 0U)
   {
-    home_mode = (uint8_t)cfg->home_mode;
+    return;
   }
-  else
-  {
-    home_mode = CTRL_HOME_NEAREST;
-  }
+  (void)Step42Tracking_SetPid(STEP42_TRACK_LOOP_SINGLE,
+                               tracking->single.kp, tracking->single.ki, tracking->single.kd);
+  (void)Step42Tracking_SetPid(STEP42_TRACK_LOOP_OUTER,
+                               tracking->outer.kp, tracking->outer.ki, tracking->outer.kd);
+  (void)Step42Tracking_SetPid(STEP42_TRACK_LOOP_INNER,
+                               tracking->inner.kp, tracking->inner.ki, tracking->inner.kd);
+  (void)Step42Tracking_SetAdvanced(tracking->filter_alpha,
+                                    tracking->dynamic_gain_min,
+                                    tracking->dynamic_gain_max,
+                                    tracking->dynamic_full_error,
+                                    tracking->prediction_ms,
+                                    tracking->timeout_ms,
+                                    tracking->single.deadband,
+                                    tracking->outer.deadband,
+                                    tracking->inner.deadband);
+  tracking_error_reverse = (loaded_flash_config.tracking_reverse != 0UL) ? 1U : 0U;
 }
 
 static uint8_t Config_Save(void)
@@ -249,6 +325,7 @@ static uint8_t Config_Save(void)
   uint32_t page_error = 0U;
   uint32_t address = STEP42_CFG_ADDR;
   uint32_t i;
+  const Step42TrackingConfig_t *tracking = Step42Tracking_GetConfig();
 
   if ((last_flash_write_ms != 0U) &&
       ((uint32_t)(HAL_GetTick() - last_flash_write_ms) < STEP42_FLASH_WRITE_GUARD_MS))
@@ -256,11 +333,20 @@ static uint8_t Config_Save(void)
     return CTRL_STATUS_BUSY;
   }
 
+  memset(&image, 0, sizeof(image));
   image.cfg.magic = STEP42_CFG_MAGIC;
   image.cfg.version = STEP42_CFG_VERSION;
   image.cfg.zero_valid = zero_valid;
   image.cfg.zero_cdeg = (int32_t)(zero_offset_deg * 100.0f + 0.5f);
   image.cfg.home_mode = home_mode;
+  Step42Control_GetPositionPID(&image.cfg.position_kp,
+                               &image.cfg.position_ki,
+                               &image.cfg.position_kd,
+                               &image.cfg.position_limit,
+                               &image.cfg.position_deadband);
+  image.cfg.closed_accel = closed_position_accel;
+  image.cfg.tracking = *tracking;
+  image.cfg.tracking_reverse = tracking_error_reverse;
   image.cfg.crc = Config_CalcCrc(&image.cfg);
 
   Step42Control_StopMotion();
@@ -287,6 +373,8 @@ static uint8_t Config_Save(void)
   }
 
   HAL_FLASH_Lock();
+  memcpy(&loaded_flash_config, &image.cfg, sizeof(loaded_flash_config));
+  loaded_flash_config_valid = 1U;
   last_flash_write_ms = HAL_GetTick();
   return CTRL_STATUS_OK;
 }
@@ -1016,6 +1104,7 @@ void Step42Control_Init(void)
   Tmc2209_SetMicrosteps(motor_microsteps);
   PID_Init(&speed_pid, 0.25f, 1.0f, 0.0f, 0.001f, 1500.0f, 1000.0f, 5.0f);
   Step42Tracking_Init();
+  Config_ApplyRuntime();
   Stepper_EN(tmc_EN_GPIO_Port, tmc_EN_Pin, TMC_UNEN);
 }
 
@@ -1247,6 +1336,21 @@ uint8_t Step42Control_SetClosedAccel(float accel)
   return 1U;
 }
 
+static uint32_t ConfigV1_CalcCrc(const Step42FlashConfigV1_t *cfg)
+{
+  const uint32_t *words = (const uint32_t *)cfg;
+  uint32_t crc = 0xA5A55A5AUL;
+  uint32_t count = (sizeof(Step42FlashConfigV1_t) / sizeof(uint32_t)) - 1U;
+  uint32_t i;
+
+  for (i = 0U; i < count; i++)
+  {
+    crc ^= words[i] + 0x9E3779B9UL + (crc << 6) + (crc >> 2);
+  }
+
+  return crc;
+}
+
 uint8_t Step42Control_SetMotionProfile(uint8_t profile)
 {
   if (profile > (uint8_t)STEPPER_PROFILE_S_CURVE)
@@ -1304,6 +1408,11 @@ uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband)
 {
   PID_Init(&weak_pid, kp, ki, kd, 0.001f, output_limit, 20.0f, deadband);
+}
+
+uint8_t Step42Control_SaveRuntimeConfig(void)
+{
+  return Config_Save();
 }
 
 uint8_t Step42Control_SetHomeMode(uint8_t mode)
