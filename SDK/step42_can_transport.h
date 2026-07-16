@@ -7,8 +7,14 @@
 extern "C" {
 #endif
 
-#define STEP42_CAN_COMMAND_ID       (0x321U)
-#define STEP42_CAN_RESPONSE_ID      (0x322U)
+#define STEP42_CAN_COMMAND_BASE     (0x300U)
+#define STEP42_CAN_RESPONSE_BASE    (0x340U)
+#define STEP42_CAN_NODE_ID_MIN      (1U)
+#define STEP42_CAN_NODE_ID_MAX      (31U)
+#define STEP42_CAN_COMMAND_ID(node_id) \
+    ((uint32_t)(STEP42_CAN_COMMAND_BASE + (uint32_t)(node_id)))
+#define STEP42_CAN_RESPONSE_ID(node_id) \
+    ((uint32_t)(STEP42_CAN_RESPONSE_BASE + (uint32_t)(node_id)))
 #define STEP42_CAN_MAX_DATA_LEN     (8U)
 #define STEP42_CAN_MAX_SEGMENTS     (12U)
 

@@ -196,7 +196,8 @@ session, PWM uses any position PID/acceleration changes made through UART.
 CAN uses the same Step42 binary frames as UART. Add `step42_can_transport.c/.h`
 to the controller project, build a normal command with `Step42_Build...`, then
 split it with `Step42_CAN_Encode()` and transmit the resulting packets using
-standard CAN ID `0x321`. The drive replies on standard CAN ID `0x322`.
+standard CAN ID `STEP42_CAN_COMMAND_ID(node_id)`. The drive replies on
+`STEP42_CAN_RESPONSE_ID(node_id)`.
 
 ```c
 uint8_t raw[STEP42_MAX_FRAME_SIZE];
@@ -206,11 +207,14 @@ uint8_t packet_count;
 
 raw_len = Step42_BuildSetAngle(raw, sizeof(raw), 1, 90.0f);
 packet_count = Step42_CAN_Encode(raw, raw_len, packets, STEP42_CAN_MAX_SEGMENTS);
-/* Send packets[0..packet_count-1] with FDCAN standard ID 0x321. */
+/* Send packets[0..packet_count-1] with STEP42_CAN_COMMAND_ID(1). */
 ```
 
-The drive runs Classic CAN at 500 kbit/s. `example_stm32_fdcan_hal.c` contains
-a complete transmit helper. To decode replies, feed each received `0x322`
+The drive runs Classic CAN at 500 kbit/s. Node IDs are `1..31`, default `1`;
+the default command/response IDs are therefore `0x301` and `0x341`.
+Use `Step42_BuildSetCanNodeId()` once to write a new ID to Flash. When changing
+an ID through CAN, listen for the acknowledgement at the new response ID.
+`example_stm32_fdcan_hal.c` contains a complete transmit helper. To decode replies, feed each received `STEP42_CAN_RESPONSE_ID(node_id)`
 packet into `Step42_CAN_ReassemblerPush()`, then pass the completed raw frame
 byte-by-byte to the regular `Step42_ParseByte()` parser.
 

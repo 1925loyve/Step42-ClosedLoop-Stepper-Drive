@@ -15,8 +15,9 @@
 #define CTRL_INTERFACE_ERROR_UART (0U)
 #define CTRL_INTERFACE_DEBUG_UART (1U)
 #define CTRL_INTERFACE_CAN (2U)
-#define STEP42_CAN_COMMAND_ID (0x321U)
-#define STEP42_CAN_RESPONSE_ID (0x322U)
+#define STEP42_CAN_COMMAND_BASE (0x300U)
+#define STEP42_CAN_RESPONSE_BASE (0x340U)
+#define STEP42_CAN_NODE_ID_MASK (0x01FU)
 #define STEP42_CAN_SEGMENT_START (0xA0U)
 #define STEP42_CAN_SEGMENT_CONTINUE (0xB0U)
 #define STEP42_CAN_REASSEMBLY_TIMEOUT_MS (30UL)
@@ -89,7 +90,7 @@ static uint8_t Ctrl_CanSendPacket(const uint8_t *data, uint8_t len)
     }
   }
 
-  header.Identifier = STEP42_CAN_RESPONSE_ID;
+  header.Identifier = STEP42_CAN_RESPONSE_BASE + Step42Control_GetCanNodeId();
   header.IdType = FDCAN_STANDARD_ID;
   header.TxFrameType = FDCAN_DATA_FRAME;
   header.DataLength = len;
@@ -226,7 +227,7 @@ static int32_t Ctrl_ClampI32(float value)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[68];
+  uint8_t resp[69];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -300,6 +301,7 @@ void Step42Comms_SendQuery(uint8_t seq)
                 Ctrl_ClampI32(Step42Control_GetMultiTurnAngleDeg() * 100.0f));
   resp[66] = Step42Control_GetMotionProfile();
   resp[67] = Step42Control_GetTrackingDirection();
+  resp[68] = Step42Control_GetCanNodeId();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -395,6 +397,7 @@ static uint8_t Ctrl_IsProgramModeAllowed(uint8_t cmd)
      remain available while a program-owned tracking step is running. */
   case CTRL_CMD_TRACK_INPUT:
   case CTRL_CMD_TRACK_QUERY:
+  case CTRL_CMD_CAN_NODE_ID:
   case CTRL_CMD_PROGRAM_MODE:
   case CTRL_CMD_PROGRAM_STEP:
   case CTRL_CMD_PROGRAM_SAVE:
@@ -979,6 +982,17 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_CAN_NODE_ID)
+  {
+    if (len != 1U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, Step42Control_SetCanNodeId(payload[0]));
+    return;
+  }
+
   if (cmd == CTRL_CMD_PROGRAM_MODE)
   {
     if (len != 1U)
@@ -1083,6 +1097,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_MOTION_PROFILE:
   case CTRL_CMD_TRACK_DIRECTION:
   case CTRL_CMD_SAVE_RUNTIME_CONFIG:
+  case CTRL_CMD_CAN_NODE_ID:
   case CTRL_CMD_PROGRAM_MODE:
   case CTRL_CMD_PROGRAM_STEP:
   case CTRL_CMD_PROGRAM_SAVE:
@@ -1110,6 +1125,7 @@ static uint8_t Ctrl_CanDebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_QUERY:
   case CTRL_CMD_TRACK_DIRECTION:
   case CTRL_CMD_SAVE_RUNTIME_CONFIG:
+  case CTRL_CMD_CAN_NODE_ID:
     return 1U;
   default:
     return 0U;
@@ -1415,8 +1431,10 @@ static void Ctrl_CanStart(void)
   filter.FilterIndex = 0U;
   filter.FilterType = FDCAN_FILTER_MASK;
   filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
-  filter.FilterID1 = STEP42_CAN_COMMAND_ID;
-  filter.FilterID2 = 0x7FFU;
+  /* Accept node IDs 1..31 at 0x300..0x31F; exact node matching happens
+     below so several Step42 boards can share a CAN bus. */
+  filter.FilterID1 = STEP42_CAN_COMMAND_BASE;
+  filter.FilterID2 = (uint32_t)(0x7FFU & ~STEP42_CAN_NODE_ID_MASK);
   if ((HAL_FDCAN_ConfigFilter(&hfdcan1, &filter) != HAL_OK) ||
       (HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT,
                                     FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE) != HAL_OK) ||
@@ -1615,7 +1633,7 @@ void Step42Comms_OnCanRxFifo0(void)
       break;
     }
     if ((header.IdType == FDCAN_STANDARD_ID) &&
-        (header.Identifier == STEP42_CAN_COMMAND_ID) &&
+        (header.Identifier == (STEP42_CAN_COMMAND_BASE + Step42Control_GetCanNodeId())) &&
         (header.RxFrameType == FDCAN_DATA_FRAME) &&
         (header.DataLength > 0U) && (header.DataLength <= 8U))
     {

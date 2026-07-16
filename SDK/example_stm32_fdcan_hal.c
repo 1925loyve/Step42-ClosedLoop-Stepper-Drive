@@ -5,6 +5,7 @@
 extern FDCAN_HandleTypeDef hfdcan1;
 
 static uint8_t step42_seq = 0U;
+#define STEP42_CAN_TARGET_NODE_ID (1U)
 
 static int Step42_CAN_SendRaw(const uint8_t *raw, uint16_t raw_len)
 {
@@ -19,7 +20,7 @@ static int Step42_CAN_SendRaw(const uint8_t *raw, uint16_t raw_len)
         return -1;
     }
 
-    header.Identifier = STEP42_CAN_COMMAND_ID;
+    header.Identifier = STEP42_CAN_COMMAND_ID(STEP42_CAN_TARGET_NODE_ID);
     header.IdType = FDCAN_STANDARD_ID;
     header.TxFrameType = FDCAN_DATA_FRAME;
     header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;

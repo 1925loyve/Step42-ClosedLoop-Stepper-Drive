@@ -600,6 +600,20 @@ uint16_t Step42_BuildSetTrackingDirection(uint8_t *buf, uint16_t max_len,
                              payload, sizeof(payload));
 }
 
+uint16_t Step42_BuildSetCanNodeId(uint8_t *buf, uint16_t max_len,
+                                  uint8_t seq, uint8_t node_id)
+{
+    uint8_t payload[1];
+
+    if ((node_id < 1U) || (node_id > 31U))
+    {
+        return 0U;
+    }
+    payload[0] = node_id;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_CAN_NODE_ID, seq,
+                             payload, sizeof(payload));
+}
+
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status)
 {
     if ((response == 0) || (status == 0) || (response->len < 1U))
@@ -639,6 +653,7 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     status->program_count = 0U;
     status->motion_profile = STEP42_PROFILE_TRAPEZOID;
     status->tracking_reverse = 0U;
+    status->can_node_id = 1U;
     if (response->len >= 32U)
     {
         status->kp = ((float)Step42_ReadI32(response->payload, 10U)) / 100.0f;
@@ -711,6 +726,10 @@ int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *sta
     if (response->len >= 68U)
     {
         status->tracking_reverse = response->payload[67U];
+    }
+    if (response->len >= 69U)
+    {
+        status->can_node_id = response->payload[68U];
     }
     return 0;
 }

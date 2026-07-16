@@ -60,6 +60,7 @@ CMD_PROGRAM_STAGE = 0x1D
 CMD_MOTION_PROFILE = 0x1E
 CMD_TRACK_DIRECTION = 0x1F
 CMD_SAVE_RUNTIME_CONFIG = 0x20
+CMD_CAN_NODE_ID = 0x21
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
@@ -306,6 +307,7 @@ class AngleViewer(tk.Tk):
         self.port_var = tk.StringVar()
         self.baud_var = tk.StringVar(value=str(BAUD_DEFAULT))
         self.interface_role_var = tk.StringVar(value="Error")
+        self.can_node_id_var = tk.StringVar(value="1")
         self.auto_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="等待串口")
         self.operation_var = tk.StringVar(value="等待操作。")
@@ -431,6 +433,8 @@ class AngleViewer(tk.Tk):
         self.pending_tx = None
         status = payload[0] if payload else None
         context = item.get("context") or {}
+        if cmd == CMD_CAN_NODE_ID and status == 0 and "can_node_id" in context:
+            self.can_node_id_var.set(str(context["can_node_id"]))
         if cmd in (CMD_ANGLE, CMD_RELATIVE_ANGLE):
             if status == 0 and "target_angle" in context:
                 self.target_angle_deg = context["target_angle"]
@@ -643,19 +647,19 @@ class AngleViewer(tk.Tk):
         connection.grid(row=0, column=0, sticky="w", padx=(0, 10))
         ttk.Label(connection, text="串口").grid(row=0, column=0, sticky=tk.W)
         self.port_combo = ttk.Combobox(connection, textvariable=self.port_var,
-                                       width=12, state="readonly")
+                                       width=10, state="readonly")
         self.port_combo.grid(row=0, column=1, padx=(4, 8))
         ttk.Label(connection, text="波特率").grid(row=0, column=2, sticky=tk.W)
         ttk.Combobox(connection, textvariable=self.baud_var, values=("115200",),
-                     state="readonly", width=9).grid(row=0, column=3, padx=(4, 8))
-        ttk.Label(connection, text="接口").grid(row=0, column=4, sticky=tk.W)
-        ttk.Label(connection, textvariable=self.interface_role_var,
-                  width=7).grid(row=0, column=5, padx=(4, 6), sticky=tk.W)
-        ttk.Checkbutton(connection, text="自动连接", variable=self.auto_var).grid(row=0, column=6, sticky=tk.W)
+                     state="readonly", width=7).grid(row=0, column=3, padx=(4, 8))
+        ttk.Checkbutton(connection, text="自动连接", variable=self.auto_var).grid(row=0, column=4, sticky=tk.W)
         ttk.Button(connection, text="刷新", command=self.refresh_ports).grid(row=1, column=0, pady=(7, 0), sticky="ew")
         ttk.Button(connection, text="连接", command=self.connect_selected).grid(row=1, column=1, pady=(7, 0), sticky="ew")
         ttk.Button(connection, text="断开", command=self.disconnect).grid(row=1, column=2, pady=(7, 0), sticky="ew")
-        ttk.Button(connection, text="查询状态", command=self.send_query).grid(row=1, column=3, columnspan=2, padx=(4, 0), pady=(7, 0), sticky="ew")
+        ttk.Button(connection, text="查询", command=self.send_query).grid(row=1, column=3, padx=(4, 0), pady=(7, 0), sticky="ew")
+        ttk.Label(connection, text="CAN ID").grid(row=1, column=4, padx=(8, 0), pady=(7, 0), sticky=tk.W)
+        ttk.Entry(connection, textvariable=self.can_node_id_var, width=4).grid(row=1, column=5, padx=(3, 0), pady=(7, 0), sticky=tk.W)
+        ttk.Button(connection, text="写 ID", command=self.send_can_node_id).grid(row=1, column=6, padx=(3, 0), pady=(7, 0), sticky="ew")
 
         telemetry = ttk.Frame(top)
         telemetry.grid(row=0, column=1, sticky="ew")
@@ -1366,6 +1370,18 @@ class AngleViewer(tk.Tk):
     def send_query(self):
         self._send(CMD_QUERY)
 
+    def send_can_node_id(self):
+        try:
+            node_id = int(self.can_node_id_var.get())
+        except ValueError:
+            self._report_operation("CAN Node ID 必须是 1 到 31 的整数。")
+            return
+        if not 1 <= node_id <= 31:
+            self._report_operation("CAN Node ID 超出范围：只允许 1 到 31。")
+            return
+        if self._send(CMD_CAN_NODE_ID, struct.pack("<B", node_id), {"can_node_id": node_id}):
+            self._report_operation(f"正在写入 CAN Node ID = {node_id} 到 Flash。")
+
     def send_stop(self):
         if self._send(CMD_STOP):
             self.speed_status_var.set("速度：已发送停止")
@@ -1740,11 +1756,12 @@ class AngleViewer(tk.Tk):
                     multi_turn_angle = struct.unpack("<i", payload[62:66])[0] / 100.0
                 motion_profile = payload[66] if len(payload) >= 67 else None
                 tracking_reverse = payload[67] if len(payload) >= 68 else None
+                can_node_id = payload[68] if len(payload) >= 69 else None
                 extended = (board_mode, sensor_flags, temp_cdeg / 100.0, rpm_x10 / 10.0,
                             track_mode, track_freq, track_speed, track_accel,
                             primary_x100 / 100.0, secondary_x100 / 100.0,
                             track_output, chopper_mode, position_state, multi_turn_angle,
-                            motion_profile, tracking_reverse)
+                            motion_profile, tracking_reverse, can_node_id)
             if len(payload) >= 59 and payload[58] in (0, 1):
                 detected_role = "Debug" if payload[58] else "Error"
                 if self.interface_role_var.get() != detected_role:
@@ -1812,6 +1829,7 @@ class AngleViewer(tk.Tk):
                 CMD_PROGRAM_MODE: "指令模式", CMD_PROGRAM_STEP: "内部指令", CMD_PROGRAM_STAGE: "写入RAM",
                 CMD_PROGRAM_SAVE: "保存内部指令", CMD_PROGRAM_RUN: "运行内部指令",
                 CMD_SAVE_RUNTIME_CONFIG: "保存 PID 到 Flash",
+                CMD_CAN_NODE_ID: "写入 CAN Node ID",
             }
             self._report_operation(f"{command_names.get(cmd, f'命令0x{cmd:02X}')}：{text}")
             if cmd == CMD_ENABLE:
@@ -1852,6 +1870,8 @@ class AngleViewer(tk.Tk):
                 self.motion_profile_status_var.set(f"曲线：{text}")
             elif cmd == CMD_SAVE_RUNTIME_CONFIG:
                 self.pid_status_var.set("PID：已保存到 Flash" if status == 0 else f"PID：保存 Flash {text}")
+            elif cmd == CMD_CAN_NODE_ID:
+                self._report_operation("CAN Node ID 已保存。请重新查询确认。" if status == 0 else f"CAN Node ID：{text}")
             elif cmd in (CMD_PROGRAM_MODE, CMD_PROGRAM_STEP, CMD_PROGRAM_STAGE,
                          CMD_PROGRAM_SAVE, CMD_PROGRAM_RUN):
                 self.sequence_status_var.set(f"内部指令：{text}")
@@ -1901,7 +1921,7 @@ class AngleViewer(tk.Tk):
                 f"Deadband={deadband:.3f}, Accel={accel_text}"
             )
         if extended is not None:
-            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state, multi_turn_angle, motion_profile, tracking_reverse = extended
+            board_mode, sensor_flags, temperature, _rpm, track_mode, track_freq, track_speed, track_accel, primary, secondary, track_output, chopper_mode, position_state, multi_turn_angle, motion_profile, tracking_reverse, can_node_id = extended
             self.board_mode_var.set(BOARD_MODE_NAMES.get(board_mode, f"未知{board_mode}"))
             if sensor_flags & 0x01:
                 suffix = " 关断" if sensor_flags & 0x04 else (" 警告" if sensor_flags & 0x02 else "")
@@ -1929,6 +1949,8 @@ class AngleViewer(tk.Tk):
                 self.motion_profile_status_var.set(f"曲线：当前 {motion_name}")
             if tracking_reverse is not None:
                 self.track_reverse_var.set(tracking_reverse != 0)
+            if can_node_id is not None and 1 <= can_node_id <= 31:
+                self.can_node_id_var.set(str(can_node_id))
             self.driver_status_var.set(
                 f"实际驱动状态：{MODE_NAMES.get(mode, '未知')} | {self.current_microsteps}细分 | {chopper_name}"
             )

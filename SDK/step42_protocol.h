@@ -46,6 +46,7 @@ extern "C" {
 #define STEP42_CMD_MOTION_PROFILE   (0x1EU)
 #define STEP42_CMD_TRACK_DIRECTION  (0x1FU)
 #define STEP42_CMD_SAVE_RUNTIME_CONFIG (0x20U)
+#define STEP42_CMD_CAN_NODE_ID      (0x21U)
 
 #define STEP42_PROFILE_TRAPEZOID    (0x00U)
 #define STEP42_PROFILE_S_CURVE      (0x01U)
@@ -152,6 +153,7 @@ typedef struct
     uint8_t program_count;
     uint8_t motion_profile;
     uint8_t tracking_reverse;
+    uint8_t can_node_id;
 } Step42_Status;
 
 typedef struct
@@ -241,6 +243,8 @@ uint16_t Step42_BuildSetMotionProfile(uint8_t *buf, uint16_t max_len,
                                       uint8_t seq, uint8_t profile);
 uint16_t Step42_BuildSetTrackingDirection(uint8_t *buf, uint16_t max_len,
                                           uint8_t seq, uint8_t reverse);
+uint16_t Step42_BuildSetCanNodeId(uint8_t *buf, uint16_t max_len,
+                                  uint8_t seq, uint8_t node_id);
 
 int Step42_ResponseStatus(const Step42_Response *response, uint8_t *status);
 int Step42_DecodeQueryStatus(const Step42_Response *response, Step42_Status *status);

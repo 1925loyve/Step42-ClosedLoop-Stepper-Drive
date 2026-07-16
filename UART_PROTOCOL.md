@@ -80,6 +80,7 @@ Status byte:
 | `0x1C` | Program query | none | `status, program_mode, program_running, program_count` |
 | `0x1D` | Stage program in RAM | `u8 count`, maximum 8 | `status`; makes uploaded steps runnable without a Flash erase |
 | `0x20` | Save persistent configuration | none | `status`; saves zero point, home mode, and all tracking PID settings to Flash. Closed-position PID/acceleration stay session-only. |
+| `0x21` | Set CAN Node ID | `u8 node_id`, range `1~31` | `status`; immediately saves the Node ID to Flash |
 
 Control modes:
 
@@ -131,8 +132,8 @@ same unchanged binary request frame described above, but carries it in 8-byte
 CAN packets because a Classic CAN frame cannot carry the complete UART frame.
 
 ```text
-Host -> drive: standard ID 0x321
-Drive -> host: standard ID 0x322
+Host -> drive: standard ID `0x300 + Node ID`
+Drive -> host: standard ID `0x340 + Node ID`
 ```
 
 Each packet has a one-byte transport header:
@@ -148,6 +149,12 @@ Packets must arrive in order within 30 ms. The original Step42 CRC remains the
 end-to-end integrity check. `SDK/step42_can_transport.c/.h` performs this
 packing and unpacking for STM32 HAL users.
 
+The default Node ID is `1`, so a new board receives at `0x301` and replies at
+`0x341`. Node ID `1~31` is stored in Flash with command `0x21`; therefore
+multiple Step42 boards can share one CAN bus. When changing an ID over CAN,
+the acknowledgement is sent with the **new** response ID. The PC upper
+computer changes it through Debug UART and reads it back in Query status.
+
 CAN supports every binary control command, including position, speed, home,
 program and tracking PID commands. It does not accept the Error UART's
 newline-delimited ASCII visual-error fast path; send `0x13 Tracking error
@@ -155,12 +162,13 @@ input` instead. In CAN mode, USART3 Debug remains available to the existing
 upper-computer program for Query, telemetry stream, and tracking-PID tuning.
 It uses the existing restricted debug permissions and cannot issue external
 position, speed, step or home motion commands; CAN remains the sole full
-motion-control transport. This initial CAN transport uses one fixed drive
-address per bus (`0x321`); multi-drive CAN addressing is reserved for a later
-protocol revision.
+motion-control transport.
 
 Protocol v14 adds this CAN transport without changing the command payloads,
 responses, sequence numbers, or CRC.
+
+Protocol v15 adds the Flash-persistent CAN Node ID and appends it as Query
+response byte `68`.
 
 Protocol v9 extends home mode: `0=nearest single-turn zero`, `1=positive
 single-turn zero`, `2=negative single-turn zero`, `3=multi-turn absolute zero`.

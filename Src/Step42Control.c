@@ -28,6 +28,8 @@
 #define WEAK_PID_MIN_CORRECTION_SPEED (80.0f)
 #define ENCODER_UNWRAP_REBASE_DEG (7200.0f)
 #define CLOSED_POSITION_LIMIT_DEG (7200.0f)
+#define STEP42_CAN_NODE_ID_MIN (1U)
+#define STEP42_CAN_NODE_ID_MAX (31U)
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim6;
@@ -144,6 +146,7 @@ static uint8_t stall_fault = 0U;
 static uint16_t stall_elapsed_ms = 0U;
 static uint8_t external_task_marked = 0U;
 static uint8_t tracking_error_reverse = 0U;
+static uint8_t can_node_id = STEP42_CAN_NODE_ID_MIN;
 static uint8_t program_mode = 0U;
 static uint8_t program_running = 0U;
 static uint8_t program_count = 0U;
@@ -249,6 +252,9 @@ static void Config_Load(void)
     zero_offset_deg = Normalize360(((float)cfg->zero_cdeg) / 100.0f);
     home_mode = (cfg->home_mode <= CTRL_HOME_MULTI_TURN) ?
                 (uint8_t)cfg->home_mode : CTRL_HOME_NEAREST;
+    can_node_id = (((uint8_t)cfg->reserved >= STEP42_CAN_NODE_ID_MIN) &&
+                   ((uint8_t)cfg->reserved <= STEP42_CAN_NODE_ID_MAX)) ?
+                      (uint8_t)cfg->reserved : STEP42_CAN_NODE_ID_MIN;
     memcpy(&loaded_flash_config, cfg, sizeof(loaded_flash_config));
     loaded_flash_config_valid = 1U;
     return;
@@ -264,12 +270,14 @@ static void Config_Load(void)
     zero_offset_deg = Normalize360(((float)legacy->zero_cdeg) / 100.0f);
     home_mode = (legacy->home_mode <= CTRL_HOME_MULTI_TURN) ?
                 (uint8_t)legacy->home_mode : CTRL_HOME_NEAREST;
+    can_node_id = STEP42_CAN_NODE_ID_MIN;
   }
   else
   {
     zero_valid = 0U;
     zero_offset_deg = 0.0f;
     home_mode = CTRL_HOME_NEAREST;
+    can_node_id = STEP42_CAN_NODE_ID_MIN;
   }
 }
 
@@ -338,6 +346,7 @@ static uint8_t Config_Save(void)
   /* Position PID and its acceleration are intentionally not persisted. */
   image.cfg.tracking = *tracking;
   image.cfg.tracking_reverse = tracking_error_reverse;
+  image.cfg.reserved = can_node_id;
   image.cfg.crc = Config_CalcCrc(&image.cfg);
 
   Step42Control_StopMotion();
@@ -1424,6 +1433,35 @@ void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_lim
 uint8_t Step42Control_SaveRuntimeConfig(void)
 {
   return Config_Save();
+}
+
+uint8_t Step42Control_SetCanNodeId(uint8_t node_id)
+{
+  uint8_t previous;
+  uint8_t status;
+
+  if ((node_id < STEP42_CAN_NODE_ID_MIN) || (node_id > STEP42_CAN_NODE_ID_MAX))
+  {
+    return CTRL_STATUS_RANGE;
+  }
+  if (node_id == can_node_id)
+  {
+    return CTRL_STATUS_OK;
+  }
+
+  previous = can_node_id;
+  can_node_id = node_id;
+  status = Config_Save();
+  if (status != CTRL_STATUS_OK)
+  {
+    can_node_id = previous;
+  }
+  return status;
+}
+
+uint8_t Step42Control_GetCanNodeId(void)
+{
+  return can_node_id;
 }
 
 uint8_t Step42Control_SetHomeMode(uint8_t mode)
