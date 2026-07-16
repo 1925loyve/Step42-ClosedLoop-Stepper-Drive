@@ -5,22 +5,43 @@
 #include "Step42Sensors.h"
 #include "Step42Tracking.h"
 #include "Tmc2209.h"
+#include <string.h>
 
 #define STATUS_STREAM_INTERVAL_MS (50UL)
 #define CTRL_RX_BUFFER_SIZE (256U)
 #define CTRL_RX_BUFFER_MASK (CTRL_RX_BUFFER_SIZE - 1U)
 #define VISION_ERROR_LINE_MAX (20U)
 #define VISION_ERROR_ABS_LIMIT (10000.0f)
+#define CTRL_INTERFACE_ERROR_UART (0U)
+#define CTRL_INTERFACE_DEBUG_UART (1U)
+#define CTRL_INTERFACE_CAN (2U)
+#define STEP42_CAN_COMMAND_ID (0x321U)
+#define STEP42_CAN_RESPONSE_ID (0x322U)
+#define STEP42_CAN_SEGMENT_START (0xA0U)
+#define STEP42_CAN_SEGMENT_CONTINUE (0xB0U)
+#define STEP42_CAN_REASSEMBLY_TIMEOUT_MS (30UL)
+#define STEP42_CAN_TX_WAIT_MS (8UL)
+#define CAN_RX_QUEUE_SIZE (16U)
+#define CAN_RX_QUEUE_MASK (CAN_RX_QUEUE_SIZE - 1U)
 
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart3;
+extern FDCAN_HandleTypeDef hfdcan1;
+
+typedef struct
+{
+  uint8_t len;
+  uint8_t data[8];
+} Step42CanPacket_t;
 
 static Step42Slave_Parser_t error_parser;
 static Step42Slave_Parser_t debug_parser;
+static Step42Slave_Parser_t can_parser;
 static UART_HandleTypeDef *response_uart = &huart2;
-/* 0: Error UART (USART2), 1: Debug UART (USART3). */
-static uint8_t response_interface = 0U;
+/* 0: Error UART (USART2), 1: Debug UART (USART3), 2: CAN. */
+static uint8_t response_interface = CTRL_INTERFACE_ERROR_UART;
 static UART_HandleTypeDef *stream_uart = &huart3;
+static uint8_t stream_interface = CTRL_INTERFACE_DEBUG_UART;
 static uint8_t error_rx_buffer[CTRL_RX_BUFFER_SIZE];
 static uint8_t debug_rx_buffer[CTRL_RX_BUFFER_SIZE];
 static volatile uint16_t error_rx_head = 0U;
@@ -36,9 +57,97 @@ static volatile uint32_t debug_rx_count = 0U;
 static uint8_t debug_stream_enable = 0U;
 static char vision_error_line[VISION_ERROR_LINE_MAX];
 static uint8_t vision_error_line_len = 0U;
+static uint8_t can_started = 0U;
+static Step42CanPacket_t can_rx_queue[CAN_RX_QUEUE_SIZE];
+static volatile uint8_t can_rx_head = 0U;
+static volatile uint8_t can_rx_tail = 0U;
+static uint8_t can_reassembly[CTRL_MAX_FRAME_SIZE];
+static uint8_t can_reassembly_len = 0U;
+static uint8_t can_reassembly_count = 0U;
+static uint8_t can_reassembly_next_index = 0U;
+static uint32_t can_reassembly_last_ms = 0U;
+
+static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint8_t len);
+static uint8_t Ctrl_CanSendRaw(const uint8_t *raw, uint8_t len);
+
+static uint8_t Ctrl_CanSendPacket(const uint8_t *data, uint8_t len)
+{
+  FDCAN_TxHeaderTypeDef header;
+  uint32_t start_ms;
+
+  if ((can_started == 0U) || (len > 8U))
+  {
+    return 0U;
+  }
+
+  start_ms = HAL_GetTick();
+  while (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1) == 0U)
+  {
+    if ((uint32_t)(HAL_GetTick() - start_ms) >= STEP42_CAN_TX_WAIT_MS)
+    {
+      return 0U;
+    }
+  }
+
+  header.Identifier = STEP42_CAN_RESPONSE_ID;
+  header.IdType = FDCAN_STANDARD_ID;
+  header.TxFrameType = FDCAN_DATA_FRAME;
+  header.DataLength = len;
+  header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  header.BitRateSwitch = FDCAN_BRS_OFF;
+  header.FDFormat = FDCAN_CLASSIC_CAN;
+  header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+  header.MessageMarker = 0U;
+  return (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &header, (uint8_t *)data) == HAL_OK) ? 1U : 0U;
+}
+
+static uint8_t Ctrl_CanSendRaw(const uint8_t *raw, uint8_t len)
+{
+  uint8_t packet[8];
+  uint8_t offset = 0U;
+  uint8_t index = 0U;
+  uint8_t chunk;
+
+  if ((raw == 0) || (len == 0U) || (len > CTRL_MAX_FRAME_SIZE))
+  {
+    return 0U;
+  }
+
+  packet[0] = STEP42_CAN_SEGMENT_START;
+  packet[1] = len;
+  chunk = (len > 6U) ? 6U : len;
+  memcpy(&packet[2], raw, chunk);
+  if (Ctrl_CanSendPacket(packet, (uint8_t)(chunk + 2U)) == 0U)
+  {
+    return 0U;
+  }
+  offset = chunk;
+  index = 1U;
+
+  while (offset < len)
+  {
+    chunk = ((uint8_t)(len - offset) > 7U) ? 7U : (uint8_t)(len - offset);
+    packet[0] = (uint8_t)(STEP42_CAN_SEGMENT_CONTINUE | index);
+    memcpy(&packet[1], &raw[offset], chunk);
+    if (Ctrl_CanSendPacket(packet, (uint8_t)(chunk + 1U)) == 0U)
+    {
+      return 0U;
+    }
+    offset = (uint8_t)(offset + chunk);
+    index++;
+  }
+
+  return 1U;
+}
 
 static void Ctrl_SendBytes(UART_HandleTypeDef *huart, uint8_t *buf, uint8_t len)
 {
+  if (response_interface == CTRL_INTERFACE_CAN)
+  {
+    (void)Ctrl_CanSendRaw(buf, len);
+    return;
+  }
+
   if (huart == stream_uart)
   {
     debug_tx_busy = 1U;
@@ -493,6 +602,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     if (payload[0] != 0U)
     {
       stream_uart = response_uart;
+      stream_interface = response_interface;
       debug_stream_enable = 1U;
     }
     else
@@ -1097,7 +1207,8 @@ static void Ctrl_ProcessRxByte(Step42Slave_Parser_t *parser,
     /* Bind a reply to the UART that completed this frame, not the last
        receiver buffer scanned by the main loop. */
     response_uart = huart;
-    response_interface = (huart == &huart3) ? 1U : 0U;
+    response_interface = (huart == &huart3) ?
+                         CTRL_INTERFACE_DEBUG_UART : CTRL_INTERFACE_ERROR_UART;
     if ((restricted != 0U) && (Ctrl_DebugCommandAllowed(frame.cmd) == 0U))
     {
       Ctrl_SendStatus(frame.cmd, frame.seq, CTRL_STATUS_DENIED);
@@ -1138,10 +1249,185 @@ static void Ctrl_ProcessBuffer(uint8_t *buffer,
   }
 }
 
+static void Ctrl_CanResetReassembly(void)
+{
+  can_reassembly_len = 0U;
+  can_reassembly_count = 0U;
+  can_reassembly_next_index = 0U;
+  can_reassembly_last_ms = 0U;
+}
+
+static void Ctrl_CanPushPacket(const uint8_t *data, uint8_t len)
+{
+  uint8_t next = (uint8_t)((can_rx_head + 1U) & CAN_RX_QUEUE_MASK);
+
+  if ((data == 0) || (len == 0U) || (len > 8U))
+  {
+    return;
+  }
+  if (next == can_rx_tail)
+  {
+    can_rx_tail = (uint8_t)((can_rx_tail + 1U) & CAN_RX_QUEUE_MASK);
+  }
+  can_rx_queue[can_rx_head].len = len;
+  memcpy(can_rx_queue[can_rx_head].data, data, len);
+  can_rx_head = next;
+}
+
+static void Ctrl_CanProcessCompleteFrame(void)
+{
+  Step42Slave_Frame_t frame;
+  uint8_t index;
+
+  Step42Slave_ParserInit(&can_parser);
+  for (index = 0U; index < can_reassembly_len; index++)
+  {
+    if (Step42Slave_ProcessByte(&can_parser, can_reassembly[index], &frame) != 0U)
+    {
+      response_uart = 0;
+      response_interface = CTRL_INTERFACE_CAN;
+      Ctrl_ProcessFrame(frame.cmd, frame.seq, frame.payload, frame.len);
+      break;
+    }
+  }
+  Ctrl_CanResetReassembly();
+}
+
+static void Ctrl_CanProcessPacket(const Step42CanPacket_t *packet)
+{
+  uint8_t header;
+  uint8_t payload_len;
+  uint8_t required;
+
+  if ((packet == 0) || (packet->len == 0U))
+  {
+    return;
+  }
+  if ((can_reassembly_len != 0U) &&
+      ((uint32_t)(HAL_GetTick() - can_reassembly_last_ms) > STEP42_CAN_REASSEMBLY_TIMEOUT_MS))
+  {
+    Ctrl_CanResetReassembly();
+  }
+
+  header = packet->data[0];
+  if (header == STEP42_CAN_SEGMENT_START)
+  {
+    if (packet->len < 3U)
+    {
+      Ctrl_CanResetReassembly();
+      return;
+    }
+    payload_len = packet->data[1];
+    if ((payload_len < 6U) || (payload_len > CTRL_MAX_FRAME_SIZE))
+    {
+      Ctrl_CanResetReassembly();
+      return;
+    }
+    required = (payload_len > 6U) ? 6U : payload_len;
+    if (packet->len != (uint8_t)(required + 2U))
+    {
+      Ctrl_CanResetReassembly();
+      return;
+    }
+    can_reassembly_len = payload_len;
+    can_reassembly_count = required;
+    can_reassembly_next_index = 1U;
+    can_reassembly_last_ms = HAL_GetTick();
+    memcpy(can_reassembly, &packet->data[2], required);
+    if (can_reassembly_count == can_reassembly_len)
+    {
+      Ctrl_CanProcessCompleteFrame();
+    }
+    return;
+  }
+
+  if ((header & 0xF0U) != STEP42_CAN_SEGMENT_CONTINUE)
+  {
+    return;
+  }
+  if ((can_reassembly_len == 0U) ||
+      ((header & 0x0FU) != can_reassembly_next_index))
+  {
+    Ctrl_CanResetReassembly();
+    return;
+  }
+
+  required = (uint8_t)(can_reassembly_len - can_reassembly_count);
+  if (required > 7U)
+  {
+    required = 7U;
+  }
+  if (packet->len != (uint8_t)(required + 1U))
+  {
+    Ctrl_CanResetReassembly();
+    return;
+  }
+  memcpy(&can_reassembly[can_reassembly_count], &packet->data[1], required);
+  can_reassembly_count = (uint8_t)(can_reassembly_count + required);
+  can_reassembly_next_index++;
+  can_reassembly_last_ms = HAL_GetTick();
+  if (can_reassembly_count == can_reassembly_len)
+  {
+    Ctrl_CanProcessCompleteFrame();
+  }
+}
+
+static void Ctrl_CanProcessQueue(void)
+{
+  while (can_rx_tail != can_rx_head)
+  {
+    Step42CanPacket_t packet = can_rx_queue[can_rx_tail];
+    can_rx_tail = (uint8_t)((can_rx_tail + 1U) & CAN_RX_QUEUE_MASK);
+    Ctrl_CanProcessPacket(&packet);
+  }
+}
+
+static void Ctrl_CanStop(void)
+{
+  if (can_started != 0U)
+  {
+    (void)HAL_FDCAN_DeactivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    (void)HAL_FDCAN_Stop(&hfdcan1);
+    can_started = 0U;
+  }
+  can_rx_head = can_rx_tail = 0U;
+  Ctrl_CanResetReassembly();
+}
+
+static void Ctrl_CanStart(void)
+{
+  FDCAN_FilterTypeDef filter;
+
+  if (can_started != 0U)
+  {
+    return;
+  }
+
+  filter.IdType = FDCAN_STANDARD_ID;
+  filter.FilterIndex = 0U;
+  filter.FilterType = FDCAN_FILTER_MASK;
+  filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+  filter.FilterID1 = STEP42_CAN_COMMAND_ID;
+  filter.FilterID2 = 0x7FFU;
+  if ((HAL_FDCAN_ConfigFilter(&hfdcan1, &filter) != HAL_OK) ||
+      (HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT,
+                                    FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE) != HAL_OK) ||
+      (HAL_FDCAN_Start(&hfdcan1) != HAL_OK) ||
+      (HAL_FDCAN_ActivateNotification(&hfdcan1,
+                                      FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0U) != HAL_OK))
+  {
+    (void)HAL_FDCAN_Stop(&hfdcan1);
+    return;
+  }
+
+  can_started = 1U;
+}
+
 static void Ctrl_StartActiveReceiver(void)
 {
   HAL_UART_AbortReceive(&huart2);
   HAL_UART_AbortReceive(&huart3);
+  Ctrl_CanStop();
 
   if (Step42BoardMode_Get() == STEP42_BOARD_UART)
   {
@@ -1152,18 +1438,26 @@ static void Ctrl_StartActiveReceiver(void)
   {
     HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
   }
+  else if (Step42BoardMode_Get() == STEP42_BOARD_CAN)
+  {
+    Ctrl_CanStart();
+  }
 }
 
 void Step42Comms_Init(void)
 {
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
+  Step42Slave_ParserInit(&can_parser);
   debug_stream_enable = 0U;
   vision_error_line_len = 0U;
-  response_interface = 0U;
+  response_interface = CTRL_INTERFACE_ERROR_UART;
   stream_uart = &huart3;
+  stream_interface = CTRL_INTERFACE_DEBUG_UART;
   error_rx_head = error_rx_tail = 0U;
   debug_rx_head = debug_rx_tail = 0U;
+  can_rx_head = can_rx_tail = 0U;
+  Ctrl_CanResetReassembly();
   Ctrl_StartActiveReceiver();
 }
 
@@ -1171,13 +1465,17 @@ void Step42Comms_OnBoardModeChanged(void)
 {
   Step42Slave_ParserInit(&error_parser);
   Step42Slave_ParserInit(&debug_parser);
+  Step42Slave_ParserInit(&can_parser);
   debug_stream_enable = 0U;
   vision_error_line_len = 0U;
-  response_interface = 0U;
+  response_interface = CTRL_INTERFACE_ERROR_UART;
   stream_uart = &huart3;
+  stream_interface = CTRL_INTERFACE_DEBUG_UART;
   debug_tx_pause_until_ms = 0U;
   error_rx_head = error_rx_tail = 0U;
   debug_rx_head = debug_rx_tail = 0U;
+  can_rx_head = can_rx_tail = 0U;
+  Ctrl_CanResetReassembly();
 
   __HAL_UART_CLEAR_OREFLAG(&huart2);
   __HAL_UART_FLUSH_DRREGISTER(&huart2);
@@ -1212,6 +1510,10 @@ void Step42Comms_ProcessRx(void)
                        &huart3,
                        0U);
   }
+  else if (Step42BoardMode_Get() == STEP42_BOARD_CAN)
+  {
+    Ctrl_CanProcessQueue();
+  }
 }
 
 void Step42Comms_SendStreamQueryIfDue(void)
@@ -1220,13 +1522,15 @@ void Step42Comms_SendStreamQueryIfDue(void)
 
   if ((debug_stream_enable != 0U) &&
       ((Step42BoardMode_Get() == STEP42_BOARD_UART) ||
-       (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG)) &&
+       (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG) ||
+       (Step42BoardMode_Get() == STEP42_BOARD_CAN)) &&
       (debug_tx_busy == 0U) &&
       ((uint32_t)(now - debug_raw_last_tx_ms) >= STATUS_STREAM_INTERVAL_MS) &&
       ((int32_t)(now - debug_tx_pause_until_ms) >= 0))
   {
     debug_raw_last_tx_ms = now;
     response_uart = stream_uart;
+    response_interface = stream_interface;
     Step42Comms_SendTelemetry();
   }
 }
@@ -1271,6 +1575,32 @@ void Step42Comms_OnUartRxComplete(UART_HandleTypeDef *huart)
         (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG))
     {
       HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
+    }
+  }
+}
+
+void Step42Comms_OnCanRxFifo0(void)
+{
+  FDCAN_RxHeaderTypeDef header;
+  uint8_t data[8];
+
+  if ((Step42BoardMode_Get() != STEP42_BOARD_CAN) || (can_started == 0U))
+  {
+    return;
+  }
+
+  while (HAL_FDCAN_GetRxFifoFillLevel(&hfdcan1, FDCAN_RX_FIFO0) != 0U)
+  {
+    if (HAL_FDCAN_GetRxMessage(&hfdcan1, FDCAN_RX_FIFO0, &header, data) != HAL_OK)
+    {
+      break;
+    }
+    if ((header.IdType == FDCAN_STANDARD_ID) &&
+        (header.Identifier == STEP42_CAN_COMMAND_ID) &&
+        (header.RxFrameType == FDCAN_DATA_FRAME) &&
+        (header.DataLength > 0U) && (header.DataLength <= 8U))
+    {
+      Ctrl_CanPushPacket(data, (uint8_t)header.DataLength);
     }
   }
 }

@@ -12,6 +12,9 @@ example_minimal.c
 step42_stm32_hal.h
 step42_stm32_hal.c
 example_stm32_hal.c
+step42_can_transport.h
+step42_can_transport.c
+example_stm32_fdcan_hal.c
 ```
 
 Add `step42_protocol.c/.h` to every project. For STM32 HAL projects, also add
@@ -187,3 +190,26 @@ mechanical turn. PWM uses a cyclic single-turn target, so crossing 0/360 never
 causes an unintended full-turn correction. At power-on the board starts with
 32 microsteps and default closed-position PID values. During one powered
 session, PWM uses any position PID/acceleration changes made through UART.
+
+## Classic CAN
+
+CAN uses the same Step42 binary frames as UART. Add `step42_can_transport.c/.h`
+to the controller project, build a normal command with `Step42_Build...`, then
+split it with `Step42_CAN_Encode()` and transmit the resulting packets using
+standard CAN ID `0x321`. The drive replies on standard CAN ID `0x322`.
+
+```c
+uint8_t raw[STEP42_MAX_FRAME_SIZE];
+Step42_CAN_Packet packets[STEP42_CAN_MAX_SEGMENTS];
+uint16_t raw_len;
+uint8_t packet_count;
+
+raw_len = Step42_BuildSetAngle(raw, sizeof(raw), 1, 90.0f);
+packet_count = Step42_CAN_Encode(raw, raw_len, packets, STEP42_CAN_MAX_SEGMENTS);
+/* Send packets[0..packet_count-1] with FDCAN standard ID 0x321. */
+```
+
+The drive runs Classic CAN at 500 kbit/s. `example_stm32_fdcan_hal.c` contains
+a complete transmit helper. To decode replies, feed each received `0x322`
+packet into `Step42_CAN_ReassemblerPush()`, then pass the completed raw frame
+byte-by-byte to the regular `Step42_ParseByte()` parser.

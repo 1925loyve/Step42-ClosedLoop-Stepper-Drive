@@ -123,6 +123,15 @@ void Step42App_UARTRxCompleteCallback(UART_HandleTypeDef *huart)
   Step42Comms_OnUartRxComplete(huart);
 }
 
+void Step42App_FDCANRxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t rx_fifo0_its)
+{
+  if ((hfdcan->Instance == FDCAN1) &&
+      ((rx_fifo0_its & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != 0U))
+  {
+    Step42Comms_OnCanRxFifo0();
+  }
+}
+
 void Step42App_TIMCaptureCallback(TIM_HandleTypeDef *htim)
 {
   Step42PwmInput_CaptureCallback(htim);

@@ -1,4 +1,4 @@
-# UART Control Protocol
+# Step42 Control Protocol
 
 Error UART (USART2) and Debug UART (USART3): 115200, 8 data bits, no parity,
 1 stop bit. The upper computer identifies which one it is connected to from
@@ -91,8 +91,8 @@ Control modes:
 ```
 
 Protocol v6 appends `response_interface` to the Query response: `0=Error/USART2`,
-`1=Debug/USART3`. The upper computer uses it to choose its waveform meaning
-automatically; the host does not need to select an interface type manually.
+`1=Debug/USART3`, `2=CAN`. The upper computer uses it to choose its waveform
+meaning automatically; the host does not need to select an interface type manually.
 
 Protocol v7 further appends `program_mode`, `program_running`, and
 `program_count` to Query. While program mode is enabled, external motion
@@ -119,9 +119,45 @@ stored program without requiring program mode. While that offline program is
 running, external motion commands are still denied until it completes or stops.
 
 Protocol v13 adds `0x20 Save persistent configuration`. It is an explicit Flash
-operation: normal PID writes update RAM only. The command persists closed
-position PID and acceleration, tracking mode/PID/advanced settings, and error
-direction. Do not issue it while the motor is moving.
+operation: normal PID writes update RAM only. The command persists the zero
+point, home mode, tracking mode/PID/advanced settings, and error direction.
+Closed-position PID and acceleration remain session-only. Do not issue it
+while the motor is moving.
+
+## CAN Transport
+
+With DIP `10`, the board enables Classic CAN at `500 kbit/s`. It accepts the
+same unchanged binary request frame described above, but carries it in 8-byte
+CAN packets because a Classic CAN frame cannot carry the complete UART frame.
+
+```text
+Host -> drive: standard ID 0x321
+Drive -> host: standard ID 0x322
+```
+
+Each packet has a one-byte transport header:
+
+```text
+Start packet:    A0 LEN RAW[0..5]       (3..8 CAN data bytes)
+Continue packet: B1..BF RAW[next..next+6] (2..8 CAN data bytes)
+```
+
+`LEN` is the complete unchanged Step42 binary frame length, including its
+`A5 5A` header and CRC. A message up to 78 bytes needs at most 12 CAN frames.
+Packets must arrive in order within 30 ms. The original Step42 CRC remains the
+end-to-end integrity check. `SDK/step42_can_transport.c/.h` performs this
+packing and unpacking for STM32 HAL users.
+
+CAN supports every binary control command, including position, speed, home,
+program and tracking PID commands. It does not accept the Error UART's
+newline-delimited ASCII visual-error fast path; send `0x13 Tracking error
+input` instead. The upper-computer program remains a UART tool and does not
+operate CAN mode. This initial CAN transport uses one fixed drive address per
+bus (`0x321`); multi-drive CAN addressing is reserved for a later protocol
+revision.
+
+Protocol v14 adds this CAN transport without changing the command payloads,
+responses, sequence numbers, or CRC.
 
 Protocol v9 extends home mode: `0=nearest single-turn zero`, `1=positive
 single-turn zero`, `2=negative single-turn zero`, `3=multi-turn absolute zero`.

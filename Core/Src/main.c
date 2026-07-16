@@ -742,6 +742,11 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   Step42App_UARTRxCompleteCallback(huart);
 }
 
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
+{
+  Step42App_FDCANRxFifo0Callback(hfdcan, RxFifo0ITs);
+}
+
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
   Step42App_TIMCaptureCallback(htim);
