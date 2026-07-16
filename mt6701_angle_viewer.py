@@ -375,7 +375,6 @@ class AngleViewer(tk.Tk):
         self.track_inner_dead_var = tk.StringVar(value="0.08")
         self.dynamic_gain_enabled_var = tk.BooleanVar(value=False)
         self.prediction_enabled_var = tk.BooleanVar(value=False)
-        self.advanced_visible_var = tk.BooleanVar(value=False)
         self.sequence_type_var = tk.StringVar(value="位置移动")
         self.sequence_param_vars = {}
         self.sequence_param_frame = None
@@ -726,10 +725,8 @@ class AngleViewer(tk.Tk):
         ttk.Button(pid_actions, text="应用运行参数", command=self.apply_position_params).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(pid_actions, text="填入默认参数", command=self.fill_default_motion_params).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
-        ttk.Button(position_pid, text="保存全部 PID 至 Flash", command=self.send_save_runtime_config).grid(
-            row=4, column=0, columnspan=4, sticky="ew", pady=(5, 0))
         ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=185).grid(
-            row=5, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+            row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
@@ -794,16 +791,17 @@ class AngleViewer(tk.Tk):
         ttk.Label(tracking_base, text="速度 %").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
         ttk.Entry(tracking_base, textvariable=self.track_speed_pct_var, width=7).grid(
             row=1, column=1, sticky=tk.W, padx=(4, 6), pady=(5, 0))
-        ttk.Label(tracking_base, text="加速度 %").grid(row=1, column=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(tracking_base, text="100%=5000 脉冲/s").grid(row=1, column=2, columnspan=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(tracking_base, text="加速度 %").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
         ttk.Entry(tracking_base, textvariable=self.track_accel_pct_var, width=5).grid(
-            row=1, column=3, sticky=tk.W, padx=(4, 0), pady=(5, 0))
+            row=2, column=1, sticky=tk.W, padx=(4, 6), pady=(5, 0))
+        ttk.Label(tracking_base, text="100%=10000 脉冲/s²").grid(row=2, column=2, columnspan=2, sticky=tk.W, pady=(5, 0))
         ttk.Button(tracking_base, text="写入", command=self.send_track_basic).grid(
-            row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+            row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Button(tracking_base, text="读取", command=self.send_track_query).grid(
-            row=2, column=2, sticky="ew", padx=(5, 2), pady=(6, 0))
-        self.advanced_toggle_button = ttk.Button(tracking_base, text="高级参数 ▼", command=self.toggle_track_advanced)
-        self.advanced_toggle_button.grid(
-            row=2, column=3, sticky="ew", padx=(2, 0), pady=(6, 0))
+            row=3, column=2, sticky="ew", padx=(5, 2), pady=(6, 0))
+        ttk.Button(tracking_base, text="PID存Flash", command=self.send_save_runtime_config).grid(
+            row=3, column=3, sticky="ew", padx=(2, 0), pady=(6, 0))
 
         tracking_loops = ttk.LabelFrame(tracking, text="PID 环参数", padding=6)
         tracking_loops.pack(fill=tk.X, pady=(8, 0))
@@ -861,6 +859,7 @@ class AngleViewer(tk.Tk):
         ttk.Entry(advanced, textvariable=self.track_inner_dead_var, width=7).grid(row=5, column=2, sticky=tk.W, pady=(2, 0))
         ttk.Button(advanced, text="写入高级参数", command=self.send_track_advanced).grid(
             row=5, column=3, sticky="ew", pady=(2, 0))
+        self.tracking_advanced.pack(fill=tk.X, pady=(8, 0))
         self.track_status_label = ttk.Label(tracking, textvariable=self.track_status_var, wraplength=300)
         self.track_status_label.pack(anchor=tk.W, pady=(7, 0))
 
@@ -1605,16 +1604,6 @@ class AngleViewer(tk.Tk):
                   *(int(round(value * 1000)) for value in deadbands)]
         if self._send(CMD_TRACK_ADVANCED, struct.pack("<9H", *values)):
             self.track_status_var.set("误差PID：高级参数已写入运行时配置")
-
-    def toggle_track_advanced(self):
-        if self.advanced_visible_var.get():
-            self.tracking_advanced.pack_forget()
-            self.advanced_visible_var.set(False)
-            self.advanced_toggle_button.configure(text="高级参数 ▼")
-        else:
-            self.tracking_advanced.pack(fill=tk.X, pady=(8, 0), before=self.track_status_label)
-            self.advanced_visible_var.set(True)
-            self.advanced_toggle_button.configure(text="高级参数 ▲")
 
     def _update_advanced_control_states(self):
         gain_state = "normal" if self.dynamic_gain_enabled_var.get() else "disabled"
