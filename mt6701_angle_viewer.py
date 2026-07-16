@@ -788,20 +788,18 @@ class AngleViewer(tk.Tk):
         ttk.Label(tracking_base, text="频率 kHz").grid(row=0, column=2, sticky=tk.W)
         ttk.Entry(tracking_base, textvariable=self.track_freq_var, width=5).grid(
             row=0, column=3, sticky=tk.W, padx=(4, 0))
-        ttk.Label(tracking_base, text="速度 %").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
-        ttk.Entry(tracking_base, textvariable=self.track_speed_pct_var, width=7).grid(
+        ttk.Label(tracking_base, text="速度%(5000)").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        ttk.Entry(tracking_base, textvariable=self.track_speed_pct_var, width=5).grid(
             row=1, column=1, sticky=tk.W, padx=(4, 6), pady=(5, 0))
-        ttk.Label(tracking_base, text="100%=5000 脉冲/s").grid(row=1, column=2, columnspan=2, sticky=tk.W, pady=(5, 0))
-        ttk.Label(tracking_base, text="加速度 %").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        ttk.Label(tracking_base, text="加速度%(10000)").grid(row=1, column=2, sticky=tk.W, pady=(5, 0))
         ttk.Entry(tracking_base, textvariable=self.track_accel_pct_var, width=5).grid(
-            row=2, column=1, sticky=tk.W, padx=(4, 6), pady=(5, 0))
-        ttk.Label(tracking_base, text="100%=10000 脉冲/s²").grid(row=2, column=2, columnspan=2, sticky=tk.W, pady=(5, 0))
+            row=1, column=3, sticky=tk.W, padx=(4, 0), pady=(5, 0))
         ttk.Button(tracking_base, text="写入", command=self.send_track_basic).grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+            row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Button(tracking_base, text="读取", command=self.send_track_query).grid(
-            row=3, column=2, sticky="ew", padx=(5, 2), pady=(6, 0))
+            row=2, column=2, sticky="ew", padx=(5, 2), pady=(6, 0))
         ttk.Button(tracking_base, text="PID存Flash", command=self.send_save_runtime_config).grid(
-            row=3, column=3, sticky="ew", padx=(2, 0), pady=(6, 0))
+            row=2, column=3, sticky="ew", padx=(2, 0), pady=(6, 0))
 
         tracking_loops = ttk.LabelFrame(tracking, text="PID 环参数", padding=6)
         tracking_loops.pack(fill=tk.X, pady=(8, 0))
