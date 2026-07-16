@@ -14,11 +14,11 @@ mode, Error UART / USART2 also accepts a newline-delimited ASCII error value.
 This is intended for a vision module, not for the PC tuning tool:
 
 ```text
--123.45\n
+-123\n
 ```
 
-- Accepted format: signed decimal, for example `0\n`, `42\r\n`, or `-18.5\n`.
-- Range: `-10000.0` to `+10000.0`.
+- Accepted format: signed integer, for example `0\n`, `42\r\n`, or `-18\n`.
+- Range: `-10000` to `+10000`.
 - No CRC and no acknowledgement are used; the newline is the frame boundary.
 - Each valid line directly refreshes the tracking PID input. A 60 fps vision
   source is therefore sufficient; firmware PID continues at its configured
@@ -151,10 +151,13 @@ packing and unpacking for STM32 HAL users.
 CAN supports every binary control command, including position, speed, home,
 program and tracking PID commands. It does not accept the Error UART's
 newline-delimited ASCII visual-error fast path; send `0x13 Tracking error
-input` instead. The upper-computer program remains a UART tool and does not
-operate CAN mode. This initial CAN transport uses one fixed drive address per
-bus (`0x321`); multi-drive CAN addressing is reserved for a later protocol
-revision.
+input` instead. In CAN mode, USART3 Debug remains available to the existing
+upper-computer program for Query, telemetry stream, and tracking-PID tuning.
+It uses the existing restricted debug permissions and cannot issue external
+position, speed, step or home motion commands; CAN remains the sole full
+motion-control transport. This initial CAN transport uses one fixed drive
+address per bus (`0x321`); multi-drive CAN addressing is reserved for a later
+protocol revision.
 
 Protocol v14 adds this CAN transport without changing the command payloads,
 responses, sequence numbers, or CRC.

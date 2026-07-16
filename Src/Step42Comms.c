@@ -1095,13 +1095,32 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   }
 }
 
+static uint8_t Ctrl_CanDebugCommandAllowed(uint8_t cmd)
+{
+  switch (cmd)
+  {
+  case CTRL_CMD_PING:
+  case CTRL_CMD_PID:
+  case CTRL_CMD_STREAM:
+  case CTRL_CMD_QUERY:
+  case CTRL_CMD_TRACK_CONFIG:
+  case CTRL_CMD_TRACK_PID:
+  case CTRL_CMD_TRACK_ADVANCED:
+  case CTRL_CMD_TRACK_DEFAULT:
+  case CTRL_CMD_TRACK_QUERY:
+  case CTRL_CMD_TRACK_DIRECTION:
+  case CTRL_CMD_SAVE_RUNTIME_CONFIG:
+    return 1U;
+  default:
+    return 0U;
+  }
+}
+
 static uint8_t Ctrl_ParseVisionError(const char *text, uint8_t len, float *error)
 {
   uint8_t index = 0U;
   uint8_t digit_seen = 0U;
-  uint8_t decimal_seen = 0U;
   float value = 0.0f;
-  float scale = 0.1f;
   float sign = 1.0f;
 
   if ((text == 0) || (error == 0) || (len == 0U))
@@ -1120,19 +1139,7 @@ static uint8_t Ctrl_ParseVisionError(const char *text, uint8_t len, float *error
     if ((ch >= '0') && (ch <= '9'))
     {
       digit_seen = 1U;
-      if (decimal_seen == 0U)
-      {
-        value = value * 10.0f + (float)(ch - '0');
-      }
-      else
-      {
-        value += (float)(ch - '0') * scale;
-        scale *= 0.1f;
-      }
-    }
-    else if ((ch == '.') && (decimal_seen == 0U))
-    {
-      decimal_seen = 1U;
+      value = value * 10.0f + (float)(ch - '0');
     }
     else
     {
@@ -1169,7 +1176,7 @@ static void Ctrl_ProcessVisionErrorByte(uint8_t value)
     return;
   }
   if (((value >= '0') && (value <= '9')) || (value == '+') ||
-      (value == '-') || (value == '.'))
+      (value == '-'))
   {
     if (vision_error_line_len < (VISION_ERROR_LINE_MAX - 1U))
     {
@@ -1209,7 +1216,8 @@ static void Ctrl_ProcessRxByte(Step42Slave_Parser_t *parser,
     response_uart = huart;
     response_interface = (huart == &huart3) ?
                          CTRL_INTERFACE_DEBUG_UART : CTRL_INTERFACE_ERROR_UART;
-    if ((restricted != 0U) && (Ctrl_DebugCommandAllowed(frame.cmd) == 0U))
+    if (((restricted == 1U) && (Ctrl_DebugCommandAllowed(frame.cmd) == 0U)) ||
+        ((restricted == 2U) && (Ctrl_CanDebugCommandAllowed(frame.cmd) == 0U)))
     {
       Ctrl_SendStatus(frame.cmd, frame.seq, CTRL_STATUS_DENIED);
       return;
@@ -1441,6 +1449,9 @@ static void Ctrl_StartActiveReceiver(void)
   else if (Step42BoardMode_Get() == STEP42_BOARD_CAN)
   {
     Ctrl_CanStart();
+    /* CAN owns all motion commands. USART3 remains a restricted PC tuning
+       channel for telemetry and tracking-PID parameters only. */
+    HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
   }
 }
 
@@ -1513,6 +1524,12 @@ void Step42Comms_ProcessRx(void)
   else if (Step42BoardMode_Get() == STEP42_BOARD_CAN)
   {
     Ctrl_CanProcessQueue();
+    Ctrl_ProcessBuffer(debug_rx_buffer,
+                       &debug_rx_head,
+                       &debug_rx_tail,
+                       &debug_parser,
+                       &huart3,
+                       2U);
   }
 }
 
@@ -1551,7 +1568,8 @@ void Step42Comms_OnUartError(UART_HandleTypeDef *huart)
     Step42Slave_ParserInit(&debug_parser);
     debug_rx_head = debug_rx_tail = 0U;
     if ((Step42BoardMode_Get() == STEP42_BOARD_UART) ||
-        (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG))
+        (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG) ||
+        (Step42BoardMode_Get() == STEP42_BOARD_CAN))
     {
       HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
     }
@@ -1572,7 +1590,8 @@ void Step42Comms_OnUartRxComplete(UART_HandleTypeDef *huart)
   {
     Ctrl_RxPush(debug_rx_buffer, &debug_rx_head, &debug_rx_tail, debug_rx_byte);
     if ((Step42BoardMode_Get() == STEP42_BOARD_UART) ||
-        (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG))
+        (Step42BoardMode_Get() == STEP42_BOARD_FACTORY_DEBUG) ||
+        (Step42BoardMode_Get() == STEP42_BOARD_CAN))
     {
       HAL_UART_Receive_IT(&huart3, &debug_rx_byte, 1U);
     }

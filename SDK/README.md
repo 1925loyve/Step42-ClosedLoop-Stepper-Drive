@@ -213,3 +213,8 @@ The drive runs Classic CAN at 500 kbit/s. `example_stm32_fdcan_hal.c` contains
 a complete transmit helper. To decode replies, feed each received `0x322`
 packet into `Step42_CAN_ReassemblerPush()`, then pass the completed raw frame
 byte-by-byte to the regular `Step42_ParseByte()` parser.
+
+In CAN mode, the drive's Debug UART remains available to the PC tuning tool
+for Query, telemetry streaming, and tracking PID configuration. It is
+deliberately restricted from issuing position, speed, step, or home motion
+commands; the CAN controller remains the only full motion-control source.
