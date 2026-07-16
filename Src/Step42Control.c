@@ -160,6 +160,7 @@ static uint32_t program_last_flash_write_ms = 0U;
 static Step42ProgramStep_t program_steps[STEP42_PROGRAM_MAX_STEPS];
 
 static uint32_t Program_CalcCrc(const Step42ProgramFlash_t *program);
+static uint32_t ConfigV1_CalcCrc(const Step42FlashConfigV1_t *cfg);
 static void Program_Load(void);
 static void Program_CaptureRuntime(void);
 static void Program_RestoreRuntime(void);
