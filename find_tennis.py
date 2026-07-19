@@ -46,7 +46,7 @@ while not app.need_exit():
         
         # Keep both err_x and err_y for a future two-axis gimbal. This board's
         # one-axis Error UART fast path currently receives horizontal err_x.
-        data = f"{err_x}\n"
+        data = f"{err_y}\n"
         ser.write(data.encode())
         
         msg = f"Score:{best_obj.score:.2f} Err:{err_x},{err_y},{1}"

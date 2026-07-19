@@ -1,0 +1,8 @@
+id: findtennisy
+name: find-tennis-y
+version: 1.0.3
+author: eee
+icon: ''
+desc: ss
+files:
+  - find_tennis.py

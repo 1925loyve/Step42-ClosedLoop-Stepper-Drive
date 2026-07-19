@@ -29,3 +29,27 @@ MDK-ARM/Listings/
 *.log
 __pycache__/
 Thumbs.db
+
+# Keil personal workspace
+*.uvoptx
+*.uvopt
+
+# Python / PyInstaller generated files
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.spec
+
+# IDE local settings
+.vscode/
+.idea/
+
+# Windows temporary files
+Desktop.ini
+$RECYCLE.BIN/
+
+# local virtual environents
+.venv/
+venv/
+env/
