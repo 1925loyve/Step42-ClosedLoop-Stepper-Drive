@@ -53,3 +53,11 @@ $RECYCLE.BIN/
 .venv/
 venv/
 env/
+
+# Local visual-test and UI-layout material; keep only on the development PC.
+find_tennis.py
+upper_computer_layout.json
+app.yaml
+张大头布局.png
+当前布局.png
+按键布局.png
