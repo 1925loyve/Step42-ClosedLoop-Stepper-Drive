@@ -14,7 +14,7 @@
 #define OPEN_POSITION_MAX_SPEED (2500.0f)
 #define OPEN_POSITION_ACCEL (5000.0f)
 #define STEP42_CFG_MAGIC (0x42323453UL)
-#define STEP42_CFG_VERSION (3UL)
+#define STEP42_CFG_VERSION (4UL)
 #define STEP42_CFG_ADDR (FLASH_BASE + FLASH_SIZE - FLASH_PAGE_SIZE)
 #define STEP42_CFG_FLASH_PAGE (FLASH_PAGE_NB - 1U)
 #define STEP42_PROGRAM_MAGIC (0x50473432UL)
@@ -63,6 +63,8 @@ typedef struct
   uint32_t tracking_reverse;
   uint32_t reserved;
   Step42ExternalPositionConfig_t external_position;
+  /* Keep CRC on an 8-byte Flash-programming boundary. */
+  uint32_t alignment_padding;
   uint32_t crc;
 } Step42FlashConfig_t;
 
@@ -1055,6 +1057,10 @@ static void ExternalPosition_RestoreRuntime(void)
   closed_position_accel = snapshot.closed_accel;
   Step42Control_SetPositionPID(snapshot.kp, snapshot.ki, snapshot.kd,
                                snapshot.pid_limit, snapshot.deadband);
+  /* External mode uses its own signed coordinate. Resume ordinary closed
+     position from the current physical single-turn cycle, never an old
+     accumulated count from before the external session. */
+  Encoder_RebaseUnwrapped();
   external_runtime_snapshot.valid = 0U;
 }
 
@@ -2206,6 +2212,17 @@ uint8_t Step42Control_SetExternalPositionConfig(const Step42ExternalPositionConf
     break;
   default:
     return 0U;
+  }
+
+  if (control_mode == CTRL_MODE_EXTERNAL_POSITION)
+  {
+    if ((motor_microsteps != config->microsteps) &&
+        (Tmc2209_SetMicrosteps(config->microsteps) == 0U))
+    {
+      return 0U;
+    }
+    motor_microsteps = config->microsteps;
+    motor_steps_per_rev = MOTOR_BASE_STEPS_PER_REV * (float)motor_microsteps;
   }
 
   external_position_config = *config;
