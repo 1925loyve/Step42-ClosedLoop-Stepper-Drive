@@ -793,20 +793,20 @@ class AngleViewer(tk.Tk):
             ttk.Entry(external_position, textvariable=variable, width=5).grid(
                 row=0, column=column + 1, sticky=tk.W, pady=2)
 
-        ttk.Label(external_position, text="范围").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(external_position, text="范围").grid(row=0, column=16, sticky=tk.W, padx=(5, 1), pady=2)
         ttk.Entry(external_position, textvariable=self.external_min_var, width=5).grid(
-            row=1, column=1, sticky=tk.W, padx=(2, 1), pady=2)
-        ttk.Label(external_position, text="~").grid(row=1, column=2, sticky=tk.W, pady=2)
+            row=0, column=17, sticky=tk.W, padx=(1, 1), pady=2)
+        ttk.Label(external_position, text="~").grid(row=0, column=18, sticky=tk.W, pady=2)
         ttk.Entry(external_position, textvariable=self.external_max_var, width=5).grid(
-            row=1, column=3, sticky=tk.W, padx=(1, 5), pady=2)
-        ttk.Label(external_position, text="测试目标").grid(row=1, column=4, sticky=tk.W, pady=2)
+            row=0, column=19, sticky=tk.W, padx=(1, 5), pady=2)
+        ttk.Label(external_position, text="测试目标").grid(row=0, column=20, sticky=tk.W, pady=2)
         ttk.Entry(external_position, textvariable=self.external_target_var, width=6).grid(
-            row=1, column=5, sticky=tk.W, padx=(2, 4), pady=2)
+            row=0, column=21, sticky=tk.W, padx=(2, 4), pady=2)
         ttk.Button(external_position, text="发送", command=self.send_external_position_target).grid(
-            row=1, column=6, columnspan=2, sticky="ew", pady=2)
+            row=0, column=22, sticky="ew", pady=2)
 
         external_actions = ttk.Frame(external_position)
-        external_actions.grid(row=2, column=0, columnspan=16, sticky="ew", pady=(4, 0))
+        external_actions.grid(row=1, column=0, columnspan=23, sticky="ew", pady=(4, 0))
         ttk.Button(external_actions, text="写入 RAM", command=self.send_external_position_config).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(external_actions, text="读取", command=self.send_external_position_query).pack(
@@ -816,9 +816,9 @@ class AngleViewer(tk.Tk):
         ttk.Button(external_actions, text="存 Flash", command=self.send_save_runtime_config).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Label(external_position, textvariable=self.external_center_var, wraplength=410).grid(
-            row=3, column=0, columnspan=16, sticky=tk.W, pady=(4, 0))
+            row=2, column=0, columnspan=23, sticky=tk.W, pady=(4, 0))
         ttk.Label(external_position, textvariable=self.external_status_var, wraplength=410).grid(
-            row=4, column=0, columnspan=16, sticky=tk.W, pady=(1, 0))
+            row=3, column=0, columnspan=23, sticky=tk.W, pady=(1, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
