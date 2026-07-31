@@ -774,42 +774,47 @@ class AngleViewer(tk.Tk):
         # The parameters remain independent even though the panel is grouped
         # with the other position controls.
         external_position = ttk.LabelFrame(
-            left, text="外部连续多圈位置追踪（独立参数，不影响普通闭环位置）", padding=6)
+            left, text="外部连续多圈位置（独立参数）", padding=6)
         external_position.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(external_position, text="细分").grid(row=0, column=0, sticky=tk.W, pady=2)
-        ttk.Combobox(external_position, textvariable=self.external_microstep_var,
-                     values=("1", "2", "4", "8", "16", "32", "64", "128", "256"),
-                     state="readonly", width=4).grid(row=0, column=1, sticky=tk.W, padx=(2, 5), pady=2)
-        ttk.Label(external_position, text="加速").grid(row=0, column=2, sticky=tk.W, pady=2)
-        ttk.Entry(external_position, textvariable=self.external_accel_var, width=5).grid(
-            row=0, column=3, sticky=tk.W, padx=(2, 5), pady=2)
-
-        for index, (label, variable) in enumerate((("Kp", self.external_kp_var),
-                                                    ("Ki", self.external_ki_var),
-                                                    ("Kd", self.external_kd_var),
-                                                    ("限幅", self.external_limit_var),
-                                                    ("死区", self.external_deadband_var),
-                                                    ("超时ms", self.external_timeout_var))):
-            column = 4 + index * 2
+        compact_external_fields = (
+            ("细分", self.external_microstep_var, "combo"),
+            ("加速", self.external_accel_var, "entry"),
+            ("Kp", self.external_kp_var, "entry"),
+            ("Ki", self.external_ki_var, "entry"),
+            ("Kd", self.external_kd_var, "entry"),
+            ("限幅", self.external_limit_var, "entry"),
+            ("死区", self.external_deadband_var, "entry"),
+            ("超时ms", self.external_timeout_var, "entry"),
+        )
+        for index, (label, variable, field_type) in enumerate(compact_external_fields):
+            row = index // 2
+            column = (index % 2) * 2
             ttk.Label(external_position, text=label).grid(
-                row=0, column=column, sticky=tk.W, padx=(0 if index == 0 else 4, 1), pady=2)
-            ttk.Entry(external_position, textvariable=variable, width=5).grid(
-                row=0, column=column + 1, sticky=tk.W, pady=2)
+                row=row, column=column, sticky=tk.W,
+                padx=(0 if column == 0 else 7, 2), pady=2)
+            if field_type == "combo":
+                ttk.Combobox(external_position, textvariable=variable,
+                             values=("1", "2", "4", "8", "16", "32", "64", "128", "256"),
+                             state="readonly", width=5).grid(
+                                 row=row, column=column + 1, sticky=tk.W, pady=2)
+            else:
+                ttk.Entry(external_position, textvariable=variable, width=6).grid(
+                    row=row, column=column + 1, sticky=tk.W, pady=2)
 
-        ttk.Label(external_position, text="范围").grid(row=0, column=16, sticky=tk.W, padx=(5, 1), pady=2)
+        ttk.Label(external_position, text="范围").grid(row=4, column=0, sticky=tk.W, pady=2)
         ttk.Entry(external_position, textvariable=self.external_min_var, width=5).grid(
-            row=0, column=17, sticky=tk.W, padx=(1, 1), pady=2)
-        ttk.Label(external_position, text="~").grid(row=0, column=18, sticky=tk.W, pady=2)
+            row=4, column=1, sticky=tk.W, padx=(2, 1), pady=2)
+        ttk.Label(external_position, text="~").grid(row=4, column=2, sticky=tk.W, pady=2)
         ttk.Entry(external_position, textvariable=self.external_max_var, width=5).grid(
-            row=0, column=19, sticky=tk.W, padx=(1, 5), pady=2)
-        ttk.Label(external_position, text="测试目标").grid(row=0, column=20, sticky=tk.W, pady=2)
+            row=4, column=3, sticky=tk.W, padx=(1, 0), pady=2)
+        ttk.Label(external_position, text="测试目标").grid(row=5, column=0, sticky=tk.W, pady=2)
         ttk.Entry(external_position, textvariable=self.external_target_var, width=6).grid(
-            row=0, column=21, sticky=tk.W, padx=(2, 4), pady=2)
+            row=5, column=1, sticky=tk.W, padx=(2, 4), pady=2)
         ttk.Button(external_position, text="发送", command=self.send_external_position_target).grid(
-            row=0, column=22, sticky="ew", pady=2)
+            row=5, column=2, columnspan=2, sticky="ew", pady=2)
 
         external_actions = ttk.Frame(external_position)
-        external_actions.grid(row=1, column=0, columnspan=23, sticky="ew", pady=(4, 0))
+        external_actions.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(4, 0))
         ttk.Button(external_actions, text="写入 RAM", command=self.send_external_position_config).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(external_actions, text="读取", command=self.send_external_position_query).pack(
@@ -819,9 +824,9 @@ class AngleViewer(tk.Tk):
         ttk.Button(external_actions, text="存 Flash", command=self.send_save_runtime_config).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Label(external_position, textvariable=self.external_center_var, wraplength=410).grid(
-            row=2, column=0, columnspan=23, sticky=tk.W, pady=(4, 0))
+            row=7, column=0, columnspan=4, sticky=tk.W, pady=(4, 0))
         ttk.Label(external_position, textvariable=self.external_status_var, wraplength=410).grid(
-            row=3, column=0, columnspan=23, sticky=tk.W, pady=(1, 0))
+            row=8, column=0, columnspan=4, sticky=tk.W, pady=(1, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
