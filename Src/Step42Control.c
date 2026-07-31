@@ -1412,10 +1412,11 @@ uint8_t Step42Control_SetMode(uint8_t mode)
     /* Leaving this dedicated mode restores the ordinary position session. */
     ExternalPosition_RestoreRuntime();
   }
-  if ((mode == CTRL_MODE_CLOSED_POSITION) &&
-      (previous_mode != CTRL_MODE_CLOSED_POSITION))
+  if (mode == CTRL_MODE_CLOSED_POSITION)
   {
-    /* A new closed-position session starts from the current physical cycle. */
+    /* An explicit closed-position mode selection starts a fresh multi-turn
+       coordinate session. This prevents a Factory Debug reconnect from
+       inheriting an old accumulated turn count and chasing it for many turns. */
     Encoder_RebaseUnwrapped();
   }
   if (mode == CTRL_MODE_TRACK_PID)
