@@ -676,7 +676,8 @@ class AngleViewer(tk.Tk):
         # Keep the control area at its required height; the waveform receives
         # only the remaining vertical space instead of being squeezed under it.
         root.rowconfigure(1, weight=0)
-        root.rowconfigure(2, weight=1)
+        root.rowconfigure(2, weight=0)
+        root.rowconfigure(3, weight=1)
 
         top = ttk.Frame(root)
         top.grid(row=0, column=0, columnspan=4, sticky="ew")
@@ -719,7 +720,7 @@ class AngleViewer(tk.Tk):
         sequence = ttk.LabelFrame(root, text="指令添加", padding=8)
         # Keep the sequence editor in its own vertical lane.  It spans the
         # waveform row so a long command form cannot push the graph downward.
-        sequence.grid(row=1, column=3, rowspan=2, sticky="ns", pady=(12, 0))
+        sequence.grid(row=1, column=3, rowspan=3, sticky="ns", pady=(12, 0))
 
         mode = ttk.LabelFrame(left, text="模式状态", padding=8)
         mode.pack(fill=tk.X)
@@ -770,9 +771,12 @@ class AngleViewer(tk.Tk):
         ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=185).grid(
             row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
 
+        # This is deliberately a separate full-width panel. Keeping it out of
+        # the narrow left column prevents its horizontal controls from
+        # squeezing the normal mode/status and center controls.
         external_position = ttk.LabelFrame(
-            left, text="外部连续多圈位置追踪（独立参数，不影响普通闭环位置）", padding=6)
-        external_position.pack(fill=tk.X, pady=(8, 0))
+            root, text="外部连续多圈位置追踪（独立参数，不影响普通闭环位置）", padding=6)
+        external_position.grid(row=2, column=0, columnspan=3, sticky="ew", padx=(0, 10), pady=(10, 0))
         ttk.Label(external_position, text="细分").grid(row=0, column=0, sticky=tk.W, pady=2)
         ttk.Combobox(external_position, textvariable=self.external_microstep_var,
                      values=("1", "2", "4", "8", "16", "32", "64", "128", "256"),
@@ -999,7 +1003,7 @@ class AngleViewer(tk.Tk):
 
         self.wave_frame = ttk.LabelFrame(root, text="多圈位置波形：目标 / 当前位置", padding=8)
         wave = self.wave_frame
-        wave.grid(row=2, column=0, columnspan=3, sticky="nsew", padx=(0, 10), pady=(12, 0))
+        wave.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=(0, 10), pady=(12, 0))
         wave_toolbar = ttk.Frame(wave)
         wave_toolbar.pack(fill=tk.X, pady=(0, 5))
         ttk.Checkbutton(wave_toolbar, text="暂停波形", variable=self.wave_paused_var).pack(side=tk.LEFT)
@@ -1012,14 +1016,14 @@ class AngleViewer(tk.Tk):
         ttk.Label(wave_toolbar, textvariable=self.status_var).pack(side=tk.RIGHT)
         canvas_wrap = ttk.Frame(wave)
         canvas_wrap.pack(fill=tk.BOTH, expand=True)
-        self.wave_axis_canvas = tk.Canvas(canvas_wrap, width=66, height=240, bg="#f8fafc", highlightthickness=1,
+        self.wave_axis_canvas = tk.Canvas(canvas_wrap, width=66, height=180, bg="#f8fafc", highlightthickness=1,
                                           highlightbackground="#cbd5e1")
         self.wave_axis_canvas.grid(row=0, column=0, sticky="ns")
         graph_wrap = ttk.Frame(canvas_wrap)
         graph_wrap.grid(row=0, column=1, sticky="nsew")
         canvas_wrap.columnconfigure(1, weight=1)
         canvas_wrap.rowconfigure(0, weight=1)
-        self.wave_canvas = tk.Canvas(graph_wrap, height=240, bg="#f8fafc", highlightthickness=1, highlightbackground="#cbd5e1")
+        self.wave_canvas = tk.Canvas(graph_wrap, height=180, bg="#f8fafc", highlightthickness=1, highlightbackground="#cbd5e1")
         self.wave_canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.wave_scroll = ttk.Scrollbar(graph_wrap, orient=tk.HORIZONTAL, command=self._wave_xview)
         self.wave_scroll.pack(side=tk.BOTTOM, fill=tk.X)
