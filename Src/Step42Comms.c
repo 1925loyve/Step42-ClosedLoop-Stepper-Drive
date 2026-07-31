@@ -404,7 +404,6 @@ static uint8_t Ctrl_IsExternalRunCommand(uint8_t cmd)
   case CTRL_CMD_MODE:
   case CTRL_CMD_MOVE_STEPS:
   case CTRL_CMD_HOME:
-  case CTRL_CMD_EXTERNAL_POSITION_TARGET:
     return 1U;
   default:
     return 0U;
@@ -423,6 +422,8 @@ static uint8_t Ctrl_IsProgramModeAllowed(uint8_t cmd)
   /* Tracking input is sensor data, not an external motion command. It must
      remain available while a program-owned tracking step is running. */
   case CTRL_CMD_TRACK_INPUT:
+  /* Same rule for the continuous-position target supplied by a vision host. */
+  case CTRL_CMD_EXTERNAL_POSITION_TARGET:
   case CTRL_CMD_TRACK_QUERY:
   case CTRL_CMD_EXTERNAL_POSITION_CONFIG:
   case CTRL_CMD_EXTERNAL_POSITION_QUERY:

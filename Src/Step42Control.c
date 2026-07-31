@@ -121,6 +121,19 @@ typedef struct
   float closed_accel;
 } Step42ProgramSnapshot_t;
 
+/* External continuous-position control owns its own microstep/PID set. */
+typedef struct
+{
+  uint8_t valid;
+  uint16_t microsteps;
+  float kp;
+  float ki;
+  float kd;
+  float pid_limit;
+  float deadband;
+  float closed_accel;
+} Step42ExternalRuntimeSnapshot_t;
+
 static const Step42DefaultParam_t default_params[] = {
     {1U, 5.63f, 0.01f, 0.0f, 2.56f, 94.0f},
     {2U, 11.25f, 0.01f, 0.0f, 1.28f, 188.0f},
@@ -183,6 +196,7 @@ static uint32_t external_position_last_target_ms = 0U;
 static Step42FlashConfig_t loaded_flash_config;
 static uint8_t loaded_flash_config_valid = 0U;
 static Step42ProgramSnapshot_t program_snapshot;
+static Step42ExternalRuntimeSnapshot_t external_runtime_snapshot;
 static uint8_t program_index = 0U;
 static uint8_t program_step_started = 0U;
 static uint32_t program_step_start_ms = 0U;
@@ -199,6 +213,8 @@ static void ExternalPosition_ResetDefaults(void);
 static void ExternalPosition_Rebase(void);
 static float ExternalPosition_UpdateCurrent(uint16_t raw_angle);
 static void ExternalPosition_ApplyConfig(void);
+static void ExternalPosition_CaptureRuntime(void);
+static void ExternalPosition_RestoreRuntime(void);
 
 static float AbsF(float value)
 {
@@ -461,7 +477,7 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
 {
   if ((step == 0) || (index >= STEP42_PROGRAM_MAX_STEPS) ||
       (step->op < STEP42_PROGRAM_OP_POSITION_ABS) ||
-      (step->op > STEP42_PROGRAM_OP_CHOPPER))
+      (step->op > STEP42_PROGRAM_OP_EXTERNAL_POSITION))
   {
     return CTRL_STATUS_RANGE;
   }
@@ -603,6 +619,7 @@ static void Program_RestoreRuntime(void)
   Step42Control_StopMotion();
   (void)Step42Control_SetMode(snapshot.mode);
   if ((snapshot.mode != CTRL_MODE_TRACK_PID) &&
+      (snapshot.mode != CTRL_MODE_EXTERNAL_POSITION) &&
       (motor_microsteps != snapshot.microsteps))
   {
     (void)Step42Control_SetMicrosteps(snapshot.microsteps);
@@ -767,6 +784,14 @@ void Step42Control_ProcessProgram(void)
       (void)Step42Control_SetMode(CTRL_MODE_TRACK_PID);
       Step42Control_SetTrackingInput(((float)step->value) / 100.0f, 0.0f);
       break;
+    case STEP42_PROGRAM_OP_EXTERNAL_POSITION:
+      if (Step42Control_SetMode(CTRL_MODE_EXTERNAL_POSITION) == 0U)
+      {
+        program_running = 0U;
+        Step42Control_StopMotion();
+        return;
+      }
+      break;
     }
     case STEP42_PROGRAM_OP_STOP:
       Step42Control_StopMotion();
@@ -794,7 +819,8 @@ void Step42Control_ProcessProgram(void)
     }
   }
   else if ((step->op == STEP42_PROGRAM_OP_SPEED) ||
-           (step->op == STEP42_PROGRAM_OP_TRACK))
+           (step->op == STEP42_PROGRAM_OP_TRACK) ||
+           (step->op == STEP42_PROGRAM_OP_EXTERNAL_POSITION))
   {
     if ((step->duration_ms != 0U) && (elapsed >= step->duration_ms))
     {
@@ -997,6 +1023,39 @@ static void ExternalPosition_ApplyConfig(void)
            external_position_config.output_limit,
            20.0f,
            external_position_config.deadband);
+}
+
+static void ExternalPosition_CaptureRuntime(void)
+{
+  external_runtime_snapshot.valid = 1U;
+  external_runtime_snapshot.microsteps = motor_microsteps;
+  external_runtime_snapshot.closed_accel = closed_position_accel;
+  Step42Control_GetPositionPID(&external_runtime_snapshot.kp,
+                               &external_runtime_snapshot.ki,
+                               &external_runtime_snapshot.kd,
+                               &external_runtime_snapshot.pid_limit,
+                               &external_runtime_snapshot.deadband);
+}
+
+static void ExternalPosition_RestoreRuntime(void)
+{
+  Step42ExternalRuntimeSnapshot_t snapshot = external_runtime_snapshot;
+
+  if (snapshot.valid == 0U)
+  {
+    return;
+  }
+
+  if ((motor_microsteps != snapshot.microsteps) &&
+      (Tmc2209_SetMicrosteps(snapshot.microsteps) != 0U))
+  {
+    motor_microsteps = snapshot.microsteps;
+    motor_steps_per_rev = MOTOR_BASE_STEPS_PER_REV * (float)motor_microsteps;
+  }
+  closed_position_accel = snapshot.closed_accel;
+  Step42Control_SetPositionPID(snapshot.kp, snapshot.ki, snapshot.kd,
+                               snapshot.pid_limit, snapshot.deadband);
+  external_runtime_snapshot.valid = 0U;
 }
 
 static void ExternalPosition_Rebase(void)
@@ -1347,6 +1406,12 @@ uint8_t Step42Control_SetMode(uint8_t mode)
   }
 
   Step42Control_StopMotion();
+  if ((previous_mode == CTRL_MODE_EXTERNAL_POSITION) &&
+      (mode != CTRL_MODE_EXTERNAL_POSITION))
+  {
+    /* Leaving this dedicated mode restores the ordinary position session. */
+    ExternalPosition_RestoreRuntime();
+  }
   if ((mode == CTRL_MODE_CLOSED_POSITION) &&
       (previous_mode != CTRL_MODE_CLOSED_POSITION))
   {
@@ -1367,8 +1432,16 @@ uint8_t Step42Control_SetMode(uint8_t mode)
   }
   else if (mode == CTRL_MODE_EXTERNAL_POSITION)
   {
+    if (previous_mode != CTRL_MODE_EXTERNAL_POSITION)
+    {
+      ExternalPosition_CaptureRuntime();
+    }
     if (Tmc2209_SetMicrosteps(external_position_config.microsteps) == 0U)
     {
+      if (previous_mode != CTRL_MODE_EXTERNAL_POSITION)
+      {
+        external_runtime_snapshot.valid = 0U;
+      }
       return 0U;
     }
     motor_microsteps = external_position_config.microsteps;

@@ -278,15 +278,13 @@ class AngleViewer(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Step42 闭环步进驱动控制中心")
-        # Keep the full desktop layout on large displays, but never create a
-        # window taller than the usable desktop. The content frame can scroll
-        # on 1080p / high-DPI displays instead of cutting off the waveform.
+        # Compact default: the full control surface fits a normal 1080p desktop.
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        window_width = min(1600, max(1120, screen_width - 32))
-        window_height = min(980, max(720, screen_height - 72))
+        window_width = min(1480, max(1080, screen_width - 32))
+        window_height = min(850, max(650, screen_height - 72))
         self.geometry(f"{window_width}x{window_height}")
-        self.minsize(min(1120, window_width), min(720, window_height))
+        self.minsize(min(1080, window_width), min(650, window_height))
         self.resizable(True, True)
         self._content_canvas = None
         self._content_scrollbar = None
@@ -772,44 +770,43 @@ class AngleViewer(tk.Tk):
         ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=185).grid(
             row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
 
-        external_position = ttk.LabelFrame(left, text="外部连续多圈位置追踪", padding=7)
+        external_position = ttk.LabelFrame(
+            left, text="外部连续多圈位置追踪（独立参数，不影响普通闭环位置）", padding=6)
         external_position.pack(fill=tk.X, pady=(8, 0))
         ttk.Label(external_position, text="细分").grid(row=0, column=0, sticky=tk.W, pady=2)
         ttk.Combobox(external_position, textvariable=self.external_microstep_var,
                      values=("1", "2", "4", "8", "16", "32", "64", "128", "256"),
-                     state="readonly", width=5).grid(row=0, column=1, sticky=tk.W, padx=(3, 7), pady=2)
+                     state="readonly", width=4).grid(row=0, column=1, sticky=tk.W, padx=(2, 5), pady=2)
         ttk.Label(external_position, text="加速").grid(row=0, column=2, sticky=tk.W, pady=2)
-        ttk.Entry(external_position, textvariable=self.external_accel_var, width=6).grid(
-            row=0, column=3, sticky=tk.W, padx=(3, 0), pady=2)
+        ttk.Entry(external_position, textvariable=self.external_accel_var, width=5).grid(
+            row=0, column=3, sticky=tk.W, padx=(2, 5), pady=2)
 
-        for row, (label, variable) in enumerate((("Kp", self.external_kp_var),
-                                                  ("Ki", self.external_ki_var),
-                                                  ("Kd", self.external_kd_var),
-                                                  ("限幅", self.external_limit_var),
-                                                  ("死区", self.external_deadband_var),
-                                                  ("超时ms", self.external_timeout_var))):
-            column = (row % 2) * 2
-            grid_row = 1 + row // 2
+        for index, (label, variable) in enumerate((("Kp", self.external_kp_var),
+                                                    ("Ki", self.external_ki_var),
+                                                    ("Kd", self.external_kd_var),
+                                                    ("限幅", self.external_limit_var),
+                                                    ("死区", self.external_deadband_var),
+                                                    ("超时ms", self.external_timeout_var))):
+            column = 4 + index * 2
             ttk.Label(external_position, text=label).grid(
-                row=grid_row, column=column, sticky=tk.W, padx=(0 if column == 0 else 7, 2), pady=2)
-            ttk.Entry(external_position, textvariable=variable, width=6).grid(
-                row=grid_row, column=column + 1, sticky=tk.W, pady=2)
+                row=0, column=column, sticky=tk.W, padx=(0 if index == 0 else 4, 1), pady=2)
+            ttk.Entry(external_position, textvariable=variable, width=5).grid(
+                row=0, column=column + 1, sticky=tk.W, pady=2)
 
-        ttk.Label(external_position, text="下限").grid(row=4, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(external_position, textvariable=self.external_min_var, width=6).grid(
-            row=4, column=1, sticky=tk.W, padx=(3, 7), pady=2)
-        ttk.Label(external_position, text="上限").grid(row=4, column=2, sticky=tk.W, pady=2)
-        ttk.Entry(external_position, textvariable=self.external_max_var, width=6).grid(
-            row=4, column=3, sticky=tk.W, padx=(3, 0), pady=2)
-
-        ttk.Label(external_position, text="测试目标").grid(row=5, column=0, sticky=tk.W, pady=2)
+        ttk.Label(external_position, text="范围").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(external_position, textvariable=self.external_min_var, width=5).grid(
+            row=1, column=1, sticky=tk.W, padx=(2, 1), pady=2)
+        ttk.Label(external_position, text="~").grid(row=1, column=2, sticky=tk.W, pady=2)
+        ttk.Entry(external_position, textvariable=self.external_max_var, width=5).grid(
+            row=1, column=3, sticky=tk.W, padx=(1, 5), pady=2)
+        ttk.Label(external_position, text="测试目标").grid(row=1, column=4, sticky=tk.W, pady=2)
         ttk.Entry(external_position, textvariable=self.external_target_var, width=6).grid(
-            row=5, column=1, sticky=tk.W, padx=(3, 7), pady=2)
+            row=1, column=5, sticky=tk.W, padx=(2, 4), pady=2)
         ttk.Button(external_position, text="发送", command=self.send_external_position_target).grid(
-            row=5, column=2, columnspan=2, sticky="ew", pady=2)
+            row=1, column=6, columnspan=2, sticky="ew", pady=2)
 
         external_actions = ttk.Frame(external_position)
-        external_actions.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(5, 0))
+        external_actions.grid(row=2, column=0, columnspan=16, sticky="ew", pady=(4, 0))
         ttk.Button(external_actions, text="写入 RAM", command=self.send_external_position_config).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(external_actions, text="读取", command=self.send_external_position_query).pack(
@@ -818,10 +815,10 @@ class AngleViewer(tk.Tk):
             side=tk.LEFT, fill=tk.X, expand=True, padx=2)
         ttk.Button(external_actions, text="存 Flash", command=self.send_save_runtime_config).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Label(external_position, textvariable=self.external_center_var, wraplength=185).grid(
-            row=7, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
-        ttk.Label(external_position, textvariable=self.external_status_var, wraplength=185).grid(
-            row=8, column=0, columnspan=4, sticky=tk.W, pady=(2, 0))
+        ttk.Label(external_position, textvariable=self.external_center_var, wraplength=410).grid(
+            row=3, column=0, columnspan=16, sticky=tk.W, pady=(4, 0))
+        ttk.Label(external_position, textvariable=self.external_status_var, wraplength=410).grid(
+            row=4, column=0, columnspan=16, sticky=tk.W, pady=(1, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
@@ -957,7 +954,7 @@ class AngleViewer(tk.Tk):
         self.track_status_label.pack(anchor=tk.W, pady=(7, 0))
 
         sequence.columnconfigure(0, weight=1)
-        command_values = ("位置移动", "速度运行", "延时", "回零", "设置细分", "设置斩波", "运行内置PID", "停止电机")
+        command_values = ("位置移动", "速度运行", "延时", "回零", "设置细分", "设置斩波", "运行内置PID", "运行外部连续位置", "停止电机")
         command_box = ttk.Combobox(sequence, textvariable=self.sequence_type_var,
                                    values=command_values, state="readonly", width=20)
         command_box.grid(row=0, column=0, sticky="ew")
@@ -1111,6 +1108,9 @@ class AngleViewer(tk.Tk):
                 ("error", "启动测试误差(0=等视觉)", "0", None),
                 ("duration", "持续时间 ms", "无限", None),
             ),
+            "运行外部连续位置": (
+                ("duration", "持续时间 ms", "无限", None),
+            ),
             "停止电机": (),
         }
         return specs.get(command_type, ())
@@ -1137,6 +1137,8 @@ class AngleViewer(tk.Tk):
         if command_type == "运行内置PID":
             return (f"运行 {params.get('pid_mode', '?')}，启动误差 {params.get('error', '0')}，"
                     f"持续 {params.get('duration', '无限')} ms")
+        if command_type == "运行外部连续位置":
+            return f"运行外部连续位置，持续 {params.get('duration', '无限')} ms"
         return "停止电机"
 
     def _refresh_sequence_tree(self, select_index=None):
@@ -1261,6 +1263,9 @@ class AngleViewer(tk.Tk):
             if not -100000 <= value <= 100000:
                 raise ValueError("内部测试误差范围为 -1000~1000")
             op = 7
+        elif command_type == "运行外部连续位置":
+            duration = self._program_duration(params.get("duration", "无限"))
+            op = 11
         elif command_type == "停止电机":
             op = 8
         else:
