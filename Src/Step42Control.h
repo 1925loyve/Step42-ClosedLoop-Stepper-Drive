@@ -38,6 +38,24 @@ typedef struct
   int32_t value;
 } Step42ProgramStep_t;
 
+/* External continuous position targets are relative to this saved software
+   center. It makes the feature independent of each MT6701's raw angle. */
+typedef struct
+{
+  uint16_t microsteps;
+  uint16_t accel;
+  float kp;
+  float ki;
+  float kd;
+  float output_limit;
+  float deadband;
+  float minimum_deg;
+  float maximum_deg;
+  uint16_t timeout_ms;
+  float center_raw_deg;
+  uint8_t center_valid;
+} Step42ExternalPositionConfig_t;
+
 void Step42Control_Init(void);
 void Step42Control_SetUserEnable(uint8_t enable);
 uint8_t Step42Control_SetMode(uint8_t mode);
@@ -91,6 +109,12 @@ void Step42Control_SetTrackingInput(float primary_error, float secondary_feedbac
 void Step42Control_SetTrackingDirection(uint8_t reverse);
 uint8_t Step42Control_GetTrackingDirection(void);
 void Step42Control_ResetTrackingDefaults(void);
+uint8_t Step42Control_SetExternalPositionConfig(const Step42ExternalPositionConfig_t *config);
+const Step42ExternalPositionConfig_t *Step42Control_GetExternalPositionConfig(void);
+uint8_t Step42Control_SetExternalPositionCenter(void);
+uint8_t Step42Control_SetExternalPositionTarget(float target_deg);
+float Step42Control_GetExternalPositionTargetDeg(void);
+float Step42Control_GetExternalPositionCurrentDeg(void);
 void Step42Control_SetThermalLockout(uint8_t lockout);
 
 uint8_t Step42Control_IsUserEnabled(void);

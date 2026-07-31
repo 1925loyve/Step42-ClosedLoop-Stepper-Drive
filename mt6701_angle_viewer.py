@@ -61,17 +61,23 @@ CMD_MOTION_PROFILE = 0x1E
 CMD_TRACK_DIRECTION = 0x1F
 CMD_SAVE_RUNTIME_CONFIG = 0x20
 CMD_CAN_NODE_ID = 0x21
+CMD_EXTERNAL_POSITION_CONFIG = 0x22
+CMD_EXTERNAL_POSITION_TARGET = 0x23
+CMD_EXTERNAL_POSITION_QUERY = 0x24
+CMD_EXTERNAL_POSITION_CENTER = 0x25
 
 MODE_OPEN_POSITION = 0
 MODE_CLOSED_POSITION = 1
 MODE_OPEN_SPEED = 2
 MODE_TRACK_PID = 3
+MODE_EXTERNAL_POSITION = 4
 
 MODE_LABELS = {
     "速度模式": MODE_OPEN_SPEED,
     "开环位置": MODE_OPEN_POSITION,
     "闭环位置": MODE_CLOSED_POSITION,
     "内置误差PID": MODE_TRACK_PID,
+    "外部连续位置": MODE_EXTERNAL_POSITION,
 }
 
 MODE_NAMES = {value: key for key, value in MODE_LABELS.items()}
@@ -386,6 +392,19 @@ class AngleViewer(tk.Tk):
         self.track_single_dead_var = tk.StringVar(value="0.08")
         self.track_outer_dead_var = tk.StringVar(value="0.08")
         self.track_inner_dead_var = tk.StringVar(value="0.08")
+        self.external_microstep_var = tk.StringVar(value="32")
+        self.external_kp_var = tk.StringVar(value="180.0")
+        self.external_ki_var = tk.StringVar(value="0.2")
+        self.external_kd_var = tk.StringVar(value="0.0")
+        self.external_limit_var = tk.StringVar(value="5000")
+        self.external_deadband_var = tk.StringVar(value="0.08")
+        self.external_accel_var = tk.StringVar(value="3000")
+        self.external_min_var = tk.StringVar(value="-80.0")
+        self.external_max_var = tk.StringVar(value="80.0")
+        self.external_timeout_var = tk.StringVar(value="200")
+        self.external_target_var = tk.StringVar(value="0.0")
+        self.external_status_var = tk.StringVar(value="外部位置：请先设定机构水平中心")
+        self.external_center_var = tk.StringVar(value="中心：未设置")
         self.dynamic_gain_enabled_var = tk.BooleanVar(value=False)
         self.prediction_enabled_var = tk.BooleanVar(value=False)
         self.sequence_type_var = tk.StringVar(value="位置移动")
@@ -752,6 +771,57 @@ class AngleViewer(tk.Tk):
             side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
         ttk.Label(position_pid, textvariable=self.pid_status_var, wraplength=185).grid(
             row=4, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+
+        external_position = ttk.LabelFrame(left, text="外部连续多圈位置追踪", padding=7)
+        external_position.pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(external_position, text="细分").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Combobox(external_position, textvariable=self.external_microstep_var,
+                     values=("1", "2", "4", "8", "16", "32", "64", "128", "256"),
+                     state="readonly", width=5).grid(row=0, column=1, sticky=tk.W, padx=(3, 7), pady=2)
+        ttk.Label(external_position, text="加速").grid(row=0, column=2, sticky=tk.W, pady=2)
+        ttk.Entry(external_position, textvariable=self.external_accel_var, width=6).grid(
+            row=0, column=3, sticky=tk.W, padx=(3, 0), pady=2)
+
+        for row, (label, variable) in enumerate((("Kp", self.external_kp_var),
+                                                  ("Ki", self.external_ki_var),
+                                                  ("Kd", self.external_kd_var),
+                                                  ("限幅", self.external_limit_var),
+                                                  ("死区", self.external_deadband_var),
+                                                  ("超时ms", self.external_timeout_var))):
+            column = (row % 2) * 2
+            grid_row = 1 + row // 2
+            ttk.Label(external_position, text=label).grid(
+                row=grid_row, column=column, sticky=tk.W, padx=(0 if column == 0 else 7, 2), pady=2)
+            ttk.Entry(external_position, textvariable=variable, width=6).grid(
+                row=grid_row, column=column + 1, sticky=tk.W, pady=2)
+
+        ttk.Label(external_position, text="下限").grid(row=4, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(external_position, textvariable=self.external_min_var, width=6).grid(
+            row=4, column=1, sticky=tk.W, padx=(3, 7), pady=2)
+        ttk.Label(external_position, text="上限").grid(row=4, column=2, sticky=tk.W, pady=2)
+        ttk.Entry(external_position, textvariable=self.external_max_var, width=6).grid(
+            row=4, column=3, sticky=tk.W, padx=(3, 0), pady=2)
+
+        ttk.Label(external_position, text="测试目标").grid(row=5, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(external_position, textvariable=self.external_target_var, width=6).grid(
+            row=5, column=1, sticky=tk.W, padx=(3, 7), pady=2)
+        ttk.Button(external_position, text="发送", command=self.send_external_position_target).grid(
+            row=5, column=2, columnspan=2, sticky="ew", pady=2)
+
+        external_actions = ttk.Frame(external_position)
+        external_actions.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(5, 0))
+        ttk.Button(external_actions, text="写入 RAM", command=self.send_external_position_config).pack(
+            side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(external_actions, text="读取", command=self.send_external_position_query).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        ttk.Button(external_actions, text="设当前为中心", command=self.send_external_position_center).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        ttk.Button(external_actions, text="存 Flash", command=self.send_save_runtime_config).pack(
+            side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(external_position, textvariable=self.external_center_var, wraplength=185).grid(
+            row=7, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+        ttk.Label(external_position, textvariable=self.external_status_var, wraplength=185).grid(
+            row=8, column=0, columnspan=4, sticky=tk.W, pady=(2, 0))
 
         zero = ttk.LabelFrame(center, text="零点设置", padding=8)
         zero.pack(fill=tk.X)
@@ -1503,7 +1573,68 @@ class AngleViewer(tk.Tk):
 
     def send_save_runtime_config(self):
         if self._send(CMD_SAVE_RUNTIME_CONFIG):
-            self.operation_var.set("正在保存零点/回零方式与内置追踪 PID 参数到 Flash，请勿断电。")
+            self.operation_var.set("正在保存零点、内置追踪和外部连续位置参数到 Flash，请勿断电。")
+
+    def _build_external_position_config_payload(self):
+        try:
+            microsteps = int(self.external_microstep_var.get())
+            accel = int(float(self.external_accel_var.get()))
+            kp = float(self.external_kp_var.get())
+            ki = float(self.external_ki_var.get())
+            kd = float(self.external_kd_var.get())
+            limit = int(float(self.external_limit_var.get()))
+            deadband = float(self.external_deadband_var.get())
+            minimum = float(self.external_min_var.get())
+            maximum = float(self.external_max_var.get())
+            timeout_ms = int(float(self.external_timeout_var.get()))
+        except ValueError:
+            self.external_status_var.set("外部位置：参数格式错误")
+            return None
+
+        if microsteps not in (1, 2, 4, 8, 16, 32, 64, 128, 256):
+            self.external_status_var.set("外部位置：细分只支持1~256的2次幂")
+            return None
+        if not (1 <= accel <= 65535 and 1 <= limit <= 10000 and
+                0 <= deadband <= 65.535 and -7200 <= minimum < maximum <= 7200 and
+                20 <= timeout_ms <= 5000):
+            self.external_status_var.set("外部位置：加速/限幅/限位/超时超出范围")
+            return None
+
+        values = (int(round(kp * 100)), int(round(ki * 100)), int(round(kd * 100)),
+                  int(round(minimum * 100)), int(round(maximum * 100)))
+        if any(value < -2147483648 or value > 2147483647 for value in values):
+            self.external_status_var.set("外部位置：PID 或限位超出协议范围")
+            return None
+        return struct.pack("<HHiiiHHiiH", microsteps, accel, values[0], values[1], values[2],
+                           limit, int(round(deadband * 1000)), values[3], values[4], timeout_ms)
+
+    def send_external_position_config(self):
+        payload = self._build_external_position_config_payload()
+        if payload is not None and self._send(CMD_EXTERNAL_POSITION_CONFIG, payload):
+            self.external_status_var.set("外部位置：参数已发送到 RAM")
+
+    def send_external_position_query(self):
+        if self._send(CMD_EXTERNAL_POSITION_QUERY):
+            self.external_status_var.set("外部位置：正在读取")
+
+    def send_external_position_center(self):
+        if self._send(CMD_EXTERNAL_POSITION_CENTER):
+            self.external_center_var.set("中心：正在保存当前机械位置到 RAM")
+
+    def send_external_position_target(self):
+        try:
+            target = float(self.external_target_var.get())
+        except ValueError:
+            self.external_status_var.set("外部位置：测试目标不是有效数字")
+            return
+        if self.current_mode != MODE_EXTERNAL_POSITION:
+            self.external_status_var.set("外部位置：先切换到外部连续位置模式")
+            return
+        if self.interface_role_var.get() == "Debug":
+            self.external_status_var.set("外部位置：Debug 口只允许配置；测试目标请改接 Error 口")
+            return
+        if self._send(CMD_EXTERNAL_POSITION_TARGET, struct.pack("<i", int(round(target * 100)))):
+            self.external_status_var.set(f"外部位置：已发送连续目标 {target:.2f}°")
 
     def send_speed_value(self):
         if self.current_mode != MODE_OPEN_SPEED:
@@ -1867,10 +1998,39 @@ class AngleViewer(tk.Tk):
             if len(payload) >= 60:
                 self.track_reverse_var.set(payload[59] != 0)
             self.track_status_var.set(
-                f"误差PID：{TRACK_MODE_NAMES.get(mode, '未知')}，速度{speed_pct}%={speed_pct * 50}，"
-                f"加速度{accel_pct}%={accel_pct * 100}，{frequency}kHz，"
+                f"误差PID：{TRACK_MODE_NAMES.get(mode, '未知')}，速度{speed_pct}%={speed_pct * 100}，"
+                f"加速度{accel_pct}%={accel_pct * 300}，{frequency}kHz，"
                 f"误差{'反向' if self.track_reverse_var.get() else '正向'}"
             )
+            return
+        if cmd == CMD_EXTERNAL_POSITION_QUERY and len(payload) >= 44:
+            if payload[0] != 0:
+                self.external_status_var.set(
+                    f"外部位置：{STATUS_NAMES.get(payload[0], payload[0])}")
+                return
+            microsteps, accel = struct.unpack("<HH", payload[1:5])
+            kp_i, ki_i, kd_i = struct.unpack("<iii", payload[5:17])
+            limit, dead_i = struct.unpack("<HH", payload[17:21])
+            min_i, max_i = struct.unpack("<ii", payload[21:29])
+            timeout_ms = struct.unpack("<H", payload[29:31])[0]
+            center_i = struct.unpack("<i", payload[31:35])[0]
+            center_valid = payload[35]
+            target_i, current_i = struct.unpack("<ii", payload[36:44])
+            self.external_microstep_var.set(str(microsteps))
+            self.external_accel_var.set(str(accel))
+            self.external_kp_var.set(f"{kp_i / 100.0:.2f}")
+            self.external_ki_var.set(f"{ki_i / 100.0:.2f}")
+            self.external_kd_var.set(f"{kd_i / 100.0:.2f}")
+            self.external_limit_var.set(str(limit))
+            self.external_deadband_var.set(f"{dead_i / 1000.0:.3f}")
+            self.external_min_var.set(f"{min_i / 100.0:.2f}")
+            self.external_max_var.set(f"{max_i / 100.0:.2f}")
+            self.external_timeout_var.set(str(timeout_ms))
+            self.external_center_var.set(
+                f"中心：{'已设置' if center_valid else '未设置'}，编码器原始角 {center_i / 100.0:.2f}°")
+            self.external_status_var.set(
+                f"外部位置：目标 {target_i / 100.0:.2f}°，当前 {current_i / 100.0:.2f}°，"
+                f"范围 {min_i / 100.0:.1f}~{max_i / 100.0:.1f}°")
             return
         if payload:
             status = payload[0]
@@ -1888,6 +2048,8 @@ class AngleViewer(tk.Tk):
                 CMD_PROGRAM_SAVE: "保存内部指令", CMD_PROGRAM_RUN: "运行内部指令",
                 CMD_SAVE_RUNTIME_CONFIG: "保存 PID 到 Flash",
                 CMD_CAN_NODE_ID: "写入 CAN Node ID",
+                CMD_EXTERNAL_POSITION_CONFIG: "外部位置参数", CMD_EXTERNAL_POSITION_TARGET: "外部位置目标",
+                CMD_EXTERNAL_POSITION_QUERY: "读取外部位置参数", CMD_EXTERNAL_POSITION_CENTER: "设置外部位置中心",
             }
             self._report_operation(f"{command_names.get(cmd, f'命令0x{cmd:02X}')}：{text}")
             if cmd == CMD_ENABLE:
@@ -1928,6 +2090,13 @@ class AngleViewer(tk.Tk):
                 self.motion_profile_status_var.set(f"曲线：{text}")
             elif cmd == CMD_SAVE_RUNTIME_CONFIG:
                 self.pid_status_var.set("PID：已保存到 Flash" if status == 0 else f"PID：保存 Flash {text}")
+                self.external_status_var.set("外部位置：已保存到 Flash" if status == 0 else f"外部位置：保存 Flash {text}")
+            elif cmd == CMD_EXTERNAL_POSITION_CONFIG:
+                self.external_status_var.set(f"外部位置：写入 RAM {text}")
+            elif cmd == CMD_EXTERNAL_POSITION_CENTER:
+                self.external_center_var.set("中心：已写入 RAM，请点击存 Flash 固化" if status == 0 else f"中心：{text}")
+            elif cmd == CMD_EXTERNAL_POSITION_TARGET:
+                self.external_status_var.set(f"外部位置：目标指令 {text}")
             elif cmd == CMD_CAN_NODE_ID:
                 self._report_operation("CAN Node ID 已保存。请重新查询确认。" if status == 0 else f"CAN Node ID：{text}")
             elif cmd in (CMD_PROGRAM_MODE, CMD_PROGRAM_STEP, CMD_PROGRAM_STAGE,
@@ -2012,12 +2181,12 @@ class AngleViewer(tk.Tk):
             self.driver_status_var.set(
                 f"实际驱动状态：{MODE_NAMES.get(mode, '未知')} | {self.current_microsteps}细分 | {chopper_name}"
             )
-            if position_state is not None and mode == MODE_CLOSED_POSITION:
+            if position_state is not None and mode in (MODE_CLOSED_POSITION, MODE_EXTERNAL_POSITION):
                 actual_target, position_error, pid_active = position_state
                 self.target_angle_deg = actual_target
                 self.position_error_deg = position_error
                 self.angle_status_var.set(
-                    f"角度：驱动目标 {actual_target:.2f}°，误差 {position_error:+.2f}°，"
+                    f"位置：驱动目标 {actual_target:.2f}°，误差 {position_error:+.2f}°，"
                     f"PID {'运行' if pid_active else '停止'}"
                 )
         self._append_wave_sample(now)

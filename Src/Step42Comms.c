@@ -368,6 +368,32 @@ static void Step42Comms_SendTrackingQuery(uint8_t seq)
   Ctrl_SendFrame(CTRL_CMD_TRACK_QUERY, seq, resp, sizeof(resp));
 }
 
+static void Step42Comms_SendExternalPositionQuery(uint8_t seq)
+{
+  uint8_t resp[44];
+  const Step42ExternalPositionConfig_t *cfg =
+      Step42Control_GetExternalPositionConfig();
+
+  resp[0] = CTRL_STATUS_OK;
+  Step42Slave_WriteU16(resp, 1U, cfg->microsteps);
+  Step42Slave_WriteU16(resp, 3U, cfg->accel);
+  Ctrl_WriteI32(resp, 5U, (int32_t)(cfg->kp * 100.0f));
+  Ctrl_WriteI32(resp, 9U, (int32_t)(cfg->ki * 100.0f));
+  Ctrl_WriteI32(resp, 13U, (int32_t)(cfg->kd * 100.0f));
+  Step42Slave_WriteU16(resp, 17U, (uint16_t)cfg->output_limit);
+  Step42Slave_WriteU16(resp, 19U, (uint16_t)(cfg->deadband * 1000.0f));
+  Ctrl_WriteI32(resp, 21U, (int32_t)(cfg->minimum_deg * 100.0f));
+  Ctrl_WriteI32(resp, 25U, (int32_t)(cfg->maximum_deg * 100.0f));
+  Step42Slave_WriteU16(resp, 29U, cfg->timeout_ms);
+  Ctrl_WriteI32(resp, 31U, (int32_t)(cfg->center_raw_deg * 100.0f));
+  resp[35] = cfg->center_valid;
+  Ctrl_WriteI32(resp, 36U,
+                Ctrl_ClampI32(Step42Control_GetExternalPositionTargetDeg() * 100.0f));
+  Ctrl_WriteI32(resp, 40U,
+                Ctrl_ClampI32(Step42Control_GetExternalPositionCurrentDeg() * 100.0f));
+  Ctrl_SendFrame(CTRL_CMD_EXTERNAL_POSITION_QUERY, seq, resp, sizeof(resp));
+}
+
 static uint8_t Ctrl_IsExternalRunCommand(uint8_t cmd)
 {
   switch (cmd)
@@ -378,6 +404,7 @@ static uint8_t Ctrl_IsExternalRunCommand(uint8_t cmd)
   case CTRL_CMD_MODE:
   case CTRL_CMD_MOVE_STEPS:
   case CTRL_CMD_HOME:
+  case CTRL_CMD_EXTERNAL_POSITION_TARGET:
     return 1U;
   default:
     return 0U;
@@ -397,6 +424,9 @@ static uint8_t Ctrl_IsProgramModeAllowed(uint8_t cmd)
      remain available while a program-owned tracking step is running. */
   case CTRL_CMD_TRACK_INPUT:
   case CTRL_CMD_TRACK_QUERY:
+  case CTRL_CMD_EXTERNAL_POSITION_CONFIG:
+  case CTRL_CMD_EXTERNAL_POSITION_QUERY:
+  case CTRL_CMD_EXTERNAL_POSITION_CENTER:
   case CTRL_CMD_CAN_NODE_ID:
   case CTRL_CMD_PROGRAM_MODE:
   case CTRL_CMD_PROGRAM_STEP:
@@ -638,7 +668,8 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     if ((payload[0] != CTRL_MODE_OPEN_SPEED) &&
         (payload[0] != CTRL_MODE_OPEN_POSITION) &&
         (payload[0] != CTRL_MODE_CLOSED_POSITION) &&
-        (payload[0] != CTRL_MODE_TRACK_PID))
+        (payload[0] != CTRL_MODE_TRACK_PID) &&
+        (payload[0] != CTRL_MODE_EXTERNAL_POSITION))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;
@@ -922,6 +953,85 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_EXTERNAL_POSITION_CONFIG)
+  {
+    Step42ExternalPositionConfig_t cfg;
+
+    if (len != 30U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    cfg = *Step42Control_GetExternalPositionConfig();
+    cfg.microsteps = Step42Slave_ReadU16(payload);
+    cfg.accel = Step42Slave_ReadU16(payload + 2U);
+    cfg.kp = ((float)Ctrl_ReadI32(payload + 4U)) / 100.0f;
+    cfg.ki = ((float)Ctrl_ReadI32(payload + 8U)) / 100.0f;
+    cfg.kd = ((float)Ctrl_ReadI32(payload + 12U)) / 100.0f;
+    cfg.output_limit = (float)Step42Slave_ReadU16(payload + 16U);
+    cfg.deadband = ((float)Step42Slave_ReadU16(payload + 18U)) / 1000.0f;
+    cfg.minimum_deg = ((float)Ctrl_ReadI32(payload + 20U)) / 100.0f;
+    cfg.maximum_deg = ((float)Ctrl_ReadI32(payload + 24U)) / 100.0f;
+    cfg.timeout_ms = Step42Slave_ReadU16(payload + 28U);
+    if (Step42Control_SetExternalPositionConfig(&cfg) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_EXTERNAL_POSITION_TARGET)
+  {
+    int32_t target_cdeg;
+
+    if (len != 4U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (Step42Control_GetMode() != CTRL_MODE_EXTERNAL_POSITION)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
+      return;
+    }
+    target_cdeg = Ctrl_ReadI32(payload);
+    if ((target_cdeg < -720000) || (target_cdeg > 720000) ||
+        (Step42Control_SetExternalPositionTarget(((float)target_cdeg) / 100.0f) == 0U))
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Step42Control_MarkExternalTask();
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_EXTERNAL_POSITION_QUERY)
+  {
+    if (len != 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    Step42Comms_SendExternalPositionQuery(seq);
+    return;
+  }
+
+  if (cmd == CTRL_CMD_EXTERNAL_POSITION_CENTER)
+  {
+    if (len != 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq,
+                    (Step42Control_SetExternalPositionCenter() != 0U) ?
+                    CTRL_STATUS_OK : CTRL_STATUS_RANGE);
+    return;
+  }
+
   if (cmd == CTRL_CMD_CHOPPER_MODE)
   {
     if (len != 1U)
@@ -1098,6 +1208,9 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_DIRECTION:
   case CTRL_CMD_SAVE_RUNTIME_CONFIG:
   case CTRL_CMD_CAN_NODE_ID:
+  case CTRL_CMD_EXTERNAL_POSITION_CONFIG:
+  case CTRL_CMD_EXTERNAL_POSITION_QUERY:
+  case CTRL_CMD_EXTERNAL_POSITION_CENTER:
   case CTRL_CMD_PROGRAM_MODE:
   case CTRL_CMD_PROGRAM_STEP:
   case CTRL_CMD_PROGRAM_SAVE:
@@ -1126,6 +1239,10 @@ static uint8_t Ctrl_CanDebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_DIRECTION:
   case CTRL_CMD_SAVE_RUNTIME_CONFIG:
   case CTRL_CMD_CAN_NODE_ID:
+  case CTRL_CMD_EXTERNAL_POSITION_CONFIG:
+  case CTRL_CMD_EXTERNAL_POSITION_TARGET:
+  case CTRL_CMD_EXTERNAL_POSITION_QUERY:
+  case CTRL_CMD_EXTERNAL_POSITION_CENTER:
     return 1U;
   default:
     return 0U;

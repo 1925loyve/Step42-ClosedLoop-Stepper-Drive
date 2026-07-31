@@ -14,7 +14,7 @@
 #define OPEN_POSITION_MAX_SPEED (2500.0f)
 #define OPEN_POSITION_ACCEL (5000.0f)
 #define STEP42_CFG_MAGIC (0x42323453UL)
-#define STEP42_CFG_VERSION (2UL)
+#define STEP42_CFG_VERSION (3UL)
 #define STEP42_CFG_ADDR (FLASH_BASE + FLASH_SIZE - FLASH_PAGE_SIZE)
 #define STEP42_CFG_FLASH_PAGE (FLASH_PAGE_NB - 1U)
 #define STEP42_PROGRAM_MAGIC (0x50473432UL)
@@ -62,8 +62,29 @@ typedef struct
   Step42TrackingConfig_t tracking;
   uint32_t tracking_reverse;
   uint32_t reserved;
+  Step42ExternalPositionConfig_t external_position;
   uint32_t crc;
 } Step42FlashConfig_t;
+
+/* Firmware v2 layout, retained so existing saved settings remain readable. */
+typedef struct
+{
+  uint32_t magic;
+  uint32_t version;
+  uint32_t zero_valid;
+  int32_t zero_cdeg;
+  uint32_t home_mode;
+  float position_kp;
+  float position_ki;
+  float position_kd;
+  float position_limit;
+  float position_deadband;
+  float closed_accel;
+  Step42TrackingConfig_t tracking;
+  uint32_t tracking_reverse;
+  uint32_t reserved;
+  uint32_t crc;
+} Step42FlashConfigV2_t;
 
 typedef struct
 {
@@ -153,6 +174,12 @@ static uint8_t program_count = 0U;
 static uint8_t program_ready = 0U;
 static uint8_t program_editing = 0U;
 static uint8_t program_save_armed = 0U;
+static Step42ExternalPositionConfig_t external_position_config;
+static volatile float external_position_current_deg = 0.0f;
+static volatile float external_position_target_deg = 0.0f;
+static uint16_t external_position_last_raw = 0U;
+static uint8_t external_position_unwrap_valid = 0U;
+static uint32_t external_position_last_target_ms = 0U;
 static Step42FlashConfig_t loaded_flash_config;
 static uint8_t loaded_flash_config_valid = 0U;
 static Step42ProgramSnapshot_t program_snapshot;
@@ -164,13 +191,31 @@ static Step42ProgramStep_t program_steps[STEP42_PROGRAM_MAX_STEPS];
 
 static uint32_t Program_CalcCrc(const Step42ProgramFlash_t *program);
 static uint32_t ConfigV1_CalcCrc(const Step42FlashConfigV1_t *cfg);
+static uint32_t ConfigV2_CalcCrc(const Step42FlashConfigV2_t *cfg);
 static void Program_Load(void);
 static void Program_CaptureRuntime(void);
 static void Program_RestoreRuntime(void);
+static void ExternalPosition_ResetDefaults(void);
+static void ExternalPosition_Rebase(void);
+static float ExternalPosition_UpdateCurrent(uint16_t raw_angle);
+static void ExternalPosition_ApplyConfig(void);
 
 static float AbsF(float value)
 {
   return (value >= 0.0f) ? value : -value;
+}
+
+static float ClampF(float value, float minimum, float maximum)
+{
+  if (value < minimum)
+  {
+    return minimum;
+  }
+  if (value > maximum)
+  {
+    return maximum;
+  }
+  return value;
 }
 
 static float Normalize360(float value)
@@ -240,6 +285,7 @@ static void Program_Load(void)
 static void Config_Load(void)
 {
   const Step42FlashConfig_t *cfg = (const Step42FlashConfig_t *)STEP42_CFG_ADDR;
+  const Step42FlashConfigV2_t *legacy_v2 = (const Step42FlashConfigV2_t *)STEP42_CFG_ADDR;
   const Step42FlashConfigV1_t *legacy = (const Step42FlashConfigV1_t *)STEP42_CFG_ADDR;
 
   loaded_flash_config_valid = 0U;
@@ -256,6 +302,31 @@ static void Config_Load(void)
                    ((uint8_t)cfg->reserved <= STEP42_CAN_NODE_ID_MAX)) ?
                       (uint8_t)cfg->reserved : STEP42_CAN_NODE_ID_MIN;
     memcpy(&loaded_flash_config, cfg, sizeof(loaded_flash_config));
+    loaded_flash_config_valid = 1U;
+    return;
+  }
+
+  if ((legacy_v2->magic == STEP42_CFG_MAGIC) &&
+      (legacy_v2->version == 2UL) &&
+      (legacy_v2->crc == ConfigV2_CalcCrc(legacy_v2)))
+  {
+    zero_valid = (legacy_v2->zero_valid != 0UL) ? 1U : 0U;
+    zero_offset_deg = Normalize360(((float)legacy_v2->zero_cdeg) / 100.0f);
+    home_mode = (legacy_v2->home_mode <= CTRL_HOME_MULTI_TURN) ?
+                (uint8_t)legacy_v2->home_mode : CTRL_HOME_NEAREST;
+    can_node_id = (((uint8_t)legacy_v2->reserved >= STEP42_CAN_NODE_ID_MIN) &&
+                   ((uint8_t)legacy_v2->reserved <= STEP42_CAN_NODE_ID_MAX)) ?
+                      (uint8_t)legacy_v2->reserved : STEP42_CAN_NODE_ID_MIN;
+    memset(&loaded_flash_config, 0, sizeof(loaded_flash_config));
+    loaded_flash_config.magic = legacy_v2->magic;
+    loaded_flash_config.version = STEP42_CFG_VERSION;
+    loaded_flash_config.zero_valid = legacy_v2->zero_valid;
+    loaded_flash_config.zero_cdeg = legacy_v2->zero_cdeg;
+    loaded_flash_config.home_mode = legacy_v2->home_mode;
+    loaded_flash_config.tracking = legacy_v2->tracking;
+    loaded_flash_config.tracking_reverse = legacy_v2->tracking_reverse;
+    loaded_flash_config.reserved = legacy_v2->reserved;
+    loaded_flash_config.external_position = external_position_config;
     loaded_flash_config_valid = 1U;
     return;
   }
@@ -288,6 +359,12 @@ static void Config_ApplyRuntime(void)
   if (loaded_flash_config_valid == 0U)
   {
     return;
+  }
+
+  if (Step42Control_SetExternalPositionConfig(
+          &loaded_flash_config.external_position) == 0U)
+  {
+    ExternalPosition_ResetDefaults();
   }
 
   /* Closed-position tuning is deliberately session-only.  Every boot starts
@@ -347,6 +424,7 @@ static uint8_t Config_Save(void)
   image.cfg.tracking = *tracking;
   image.cfg.tracking_reverse = tracking_error_reverse;
   image.cfg.reserved = can_node_id;
+  image.cfg.external_position = external_position_config;
   image.cfg.crc = Config_CalcCrc(&image.cfg);
 
   Step42Control_StopMotion();
@@ -893,6 +971,79 @@ static float MT6701_UpdateUnwrappedDeg(uint16_t raw_angle)
   return mt6701_unwrapped_deg;
 }
 
+static void ExternalPosition_ResetDefaults(void)
+{
+  memset(&external_position_config, 0, sizeof(external_position_config));
+  external_position_config.microsteps = 32U;
+  external_position_config.accel = 3000U;
+  external_position_config.kp = 180.0f;
+  external_position_config.ki = 0.2f;
+  external_position_config.kd = 0.0f;
+  external_position_config.output_limit = 5000.0f;
+  external_position_config.deadband = 0.08f;
+  external_position_config.minimum_deg = -80.0f;
+  external_position_config.maximum_deg = 80.0f;
+  external_position_config.timeout_ms = 200U;
+}
+
+static void ExternalPosition_ApplyConfig(void)
+{
+  closed_position_accel = (float)external_position_config.accel;
+  PID_Init(&weak_pid,
+           external_position_config.kp,
+           external_position_config.ki,
+           external_position_config.kd,
+           0.001f,
+           external_position_config.output_limit,
+           20.0f,
+           external_position_config.deadband);
+}
+
+static void ExternalPosition_Rebase(void)
+{
+  float physical_deg = PID_RawToDeg(mt6701_raw_angle);
+
+  if (external_position_config.center_valid == 0U)
+  {
+    external_position_unwrap_valid = 0U;
+    external_position_current_deg = 0.0f;
+    return;
+  }
+
+  /* The initial point is signed relative to the saved center. This recovers
+     the same -80..+80 coordinate after a power cycle despite MT6701 only
+     providing a single-turn absolute angle. */
+  external_position_current_deg = PID_AngleErrorDeg(
+      physical_deg, external_position_config.center_raw_deg);
+  external_position_last_raw = mt6701_raw_angle;
+  external_position_unwrap_valid = 1U;
+}
+
+static float ExternalPosition_UpdateCurrent(uint16_t raw_angle)
+{
+  int32_t delta_raw;
+
+  if (external_position_unwrap_valid == 0U)
+  {
+    ExternalPosition_Rebase();
+    return external_position_current_deg;
+  }
+
+  delta_raw = (int32_t)raw_angle - (int32_t)external_position_last_raw;
+  if (delta_raw > 8192)
+  {
+    delta_raw -= 16384;
+  }
+  else if (delta_raw < -8192)
+  {
+    delta_raw += 16384;
+  }
+
+  external_position_last_raw = raw_angle;
+  external_position_current_deg += ((float)delta_raw) * 360.0f / 16384.0f;
+  return external_position_current_deg;
+}
+
 static float MapAngleToCurrentCycle(float target_angle)
 {
   float cycle_start;
@@ -1098,6 +1249,7 @@ static void Tracking_ApplySpeed(float speed)
 void Step42Control_Init(void)
 {
   Stepper_Init(&Motor_42, &htim1, TIM_CHANNEL_1, tmc_DIR_GPIO_Port, tmc_DIR_Pin, MODE_SPEED);
+  ExternalPosition_ResetDefaults();
   Config_Load();
   Program_Load();
   ApplyDefaultParams(motor_microsteps);
@@ -1149,6 +1301,16 @@ void Step42Control_SetUserEnable(uint8_t enable)
       PID_Reset(&weak_pid);
       weak_pid_enable = 1U;
     }
+    else if (control_mode == CTRL_MODE_EXTERNAL_POSITION)
+    {
+      ExternalPosition_Rebase();
+      external_position_target_deg = ClampF(external_position_current_deg,
+                                            external_position_config.minimum_deg,
+                                            external_position_config.maximum_deg);
+      weak_pid_target_deg = external_position_target_deg;
+      PID_Reset(&weak_pid);
+      weak_pid_enable = 1U;
+    }
     else
     {
       weak_pid_enable = 0U;
@@ -1173,7 +1335,13 @@ uint8_t Step42Control_SetMode(uint8_t mode)
   if ((mode != CTRL_MODE_OPEN_SPEED) &&
       (mode != CTRL_MODE_OPEN_POSITION) &&
       (mode != CTRL_MODE_CLOSED_POSITION) &&
-      (mode != CTRL_MODE_TRACK_PID))
+      (mode != CTRL_MODE_TRACK_PID) &&
+      (mode != CTRL_MODE_EXTERNAL_POSITION))
+  {
+    return 0U;
+  }
+  if ((mode == CTRL_MODE_EXTERNAL_POSITION) &&
+      (external_position_config.center_valid == 0U))
   {
     return 0U;
   }
@@ -1196,6 +1364,21 @@ uint8_t Step42Control_SetMode(uint8_t mode)
       motor_microsteps = 32U;
       motor_steps_per_rev = MOTOR_BASE_STEPS_PER_REV * 32.0f;
     }
+  }
+  else if (mode == CTRL_MODE_EXTERNAL_POSITION)
+  {
+    if (Tmc2209_SetMicrosteps(external_position_config.microsteps) == 0U)
+    {
+      return 0U;
+    }
+    motor_microsteps = external_position_config.microsteps;
+    motor_steps_per_rev = MOTOR_BASE_STEPS_PER_REV * (float)motor_microsteps;
+    ExternalPosition_ApplyConfig();
+    ExternalPosition_Rebase();
+    external_position_target_deg = ClampF(external_position_current_deg,
+                                          external_position_config.minimum_deg,
+                                          external_position_config.maximum_deg);
+    external_position_last_target_ms = HAL_GetTick();
   }
 
   control_mode = mode;
@@ -1221,6 +1404,12 @@ uint8_t Step42Control_SetMode(uint8_t mode)
   if ((motor_user_enabled != 0U) && (mode == CTRL_MODE_CLOSED_POSITION))
   {
     weak_pid_target_deg = mt6701_unwrapped_deg;
+    PID_Reset(&weak_pid);
+    weak_pid_enable = 1U;
+  }
+  else if ((motor_user_enabled != 0U) && (mode == CTRL_MODE_EXTERNAL_POSITION))
+  {
+    weak_pid_target_deg = external_position_target_deg;
     PID_Reset(&weak_pid);
     weak_pid_enable = 1U;
   }
@@ -1371,6 +1560,20 @@ static uint32_t ConfigV1_CalcCrc(const Step42FlashConfigV1_t *cfg)
   return crc;
 }
 
+static uint32_t ConfigV2_CalcCrc(const Step42FlashConfigV2_t *cfg)
+{
+  const uint32_t *words = (const uint32_t *)cfg;
+  uint32_t crc = 0xA5A55A5AUL;
+  uint32_t count = (sizeof(Step42FlashConfigV2_t) / sizeof(uint32_t)) - 1U;
+  uint32_t i;
+
+  for (i = 0U; i < count; i++)
+  {
+    crc ^= words[i] + 0x9E3779B9UL + (crc << 6) + (crc >> 2);
+  }
+  return crc;
+}
+
 uint8_t Step42Control_SetMotionProfile(uint8_t profile)
 {
   if (profile > (uint8_t)STEPPER_PROFILE_S_CURVE)
@@ -1386,7 +1589,8 @@ uint8_t Step42Control_SetMotionProfile(uint8_t profile)
 
 uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
 {
-  if (control_mode == CTRL_MODE_TRACK_PID)
+  if ((control_mode == CTRL_MODE_TRACK_PID) ||
+      (control_mode == CTRL_MODE_EXTERNAL_POSITION))
   {
     return 0U;
   }
@@ -1678,6 +1882,7 @@ uint8_t Step42Control_TimerTick1kHz(void)
 
     /* Speed and tracking modes do not need an ever-growing angle coordinate. */
     if ((control_mode != CTRL_MODE_CLOSED_POSITION) &&
+        (control_mode != CTRL_MODE_EXTERNAL_POSITION) &&
         (AbsF(unwrapped_angle) >= ENCODER_UNWRAP_REBASE_DEG))
     {
       Encoder_RebaseFromTimer();
@@ -1708,6 +1913,19 @@ uint8_t Step42Control_TimerTick1kHz(void)
     if (control_mode == CTRL_MODE_CLOSED_POSITION)
     {
       WeakPID_Update(unwrapped_angle);
+    }
+    else if (control_mode == CTRL_MODE_EXTERNAL_POSITION)
+    {
+      float external_angle = ExternalPosition_UpdateCurrent(raw_angle);
+
+      if ((uint32_t)(HAL_GetTick() - external_position_last_target_ms) >
+          external_position_config.timeout_ms)
+      {
+        /* A lost external controller returns the pipe to its saved center. */
+        external_position_target_deg = 0.0f;
+      }
+      weak_pid_target_deg = external_position_target_deg;
+      WeakPID_Update(external_angle);
     }
     else if (control_mode == CTRL_MODE_TRACK_PID)
     {
@@ -1749,6 +1967,10 @@ float Step42Control_GetAngleDeg(void)
 
 float Step42Control_GetMultiTurnAngleDeg(void)
 {
+  if (control_mode == CTRL_MODE_EXTERNAL_POSITION)
+  {
+    return external_position_current_deg;
+  }
   return mt6701_unwrapped_deg;
 }
 
@@ -1759,11 +1981,19 @@ float Step42Control_GetPidOutputSteps(void)
 
 float Step42Control_GetPositionTargetDeg(void)
 {
+  if (control_mode == CTRL_MODE_EXTERNAL_POSITION)
+  {
+    return external_position_target_deg;
+  }
   return weak_pid_target_deg;
 }
 
 float Step42Control_GetPositionErrorDeg(void)
 {
+  if (control_mode == CTRL_MODE_EXTERNAL_POSITION)
+  {
+    return external_position_target_deg - external_position_current_deg;
+  }
   if ((control_mode != CTRL_MODE_CLOSED_POSITION) || (weak_pid_enable == 0U))
   {
     return 0.0f;
@@ -1773,7 +2003,9 @@ float Step42Control_GetPositionErrorDeg(void)
 
 uint8_t Step42Control_IsPositionPidActive(void)
 {
-  return ((control_mode == CTRL_MODE_CLOSED_POSITION) && (weak_pid_enable != 0U)) ? 1U : 0U;
+  return (((control_mode == CTRL_MODE_CLOSED_POSITION) ||
+           (control_mode == CTRL_MODE_EXTERNAL_POSITION)) &&
+          (weak_pid_enable != 0U)) ? 1U : 0U;
 }
 
 float Step42Control_GetClosedAccel(void)
@@ -1867,6 +2099,106 @@ void Step42Control_ResetTrackingDefaults(void)
   {
     SetControlLoopFrequency(Step42Tracking_GetConfig()->frequency_khz);
   }
+}
+
+uint8_t Step42Control_SetExternalPositionConfig(const Step42ExternalPositionConfig_t *config)
+{
+  if ((config == 0) || (config->accel == 0U) ||
+      (config->timeout_ms < 20U) || (config->timeout_ms > 5000U) ||
+      (config->minimum_deg < -7200.0f) || (config->maximum_deg > 7200.0f) ||
+      (config->minimum_deg >= config->maximum_deg) ||
+      (config->kp < 0.0f) || (config->kp > 5000.0f) ||
+      (config->ki < 0.0f) || (config->ki > 5000.0f) ||
+      (config->kd < 0.0f) || (config->kd > 5000.0f) ||
+      (config->output_limit < 1.0f) || (config->output_limit > 10000.0f) ||
+      (config->deadband < 0.0f) || (config->deadband > 65.535f) ||
+      (config->center_raw_deg < 0.0f) || (config->center_raw_deg >= 360.0f) ||
+      (config->center_valid > 1U))
+  {
+    return 0U;
+  }
+
+  switch (config->microsteps)
+  {
+  case 1U:
+  case 2U:
+  case 4U:
+  case 8U:
+  case 16U:
+  case 32U:
+  case 64U:
+  case 128U:
+  case 256U:
+    break;
+  default:
+    return 0U;
+  }
+
+  external_position_config = *config;
+  external_position_config.center_raw_deg = Normalize360(config->center_raw_deg);
+  if (control_mode == CTRL_MODE_EXTERNAL_POSITION)
+  {
+    ExternalPosition_ApplyConfig();
+    external_position_target_deg = ClampF(external_position_target_deg,
+                                          external_position_config.minimum_deg,
+                                          external_position_config.maximum_deg);
+  }
+  return 1U;
+}
+
+const Step42ExternalPositionConfig_t *Step42Control_GetExternalPositionConfig(void)
+{
+  return &external_position_config;
+}
+
+uint8_t Step42Control_SetExternalPositionCenter(void)
+{
+  if (mt6701_status != MT6701_OK)
+  {
+    return 0U;
+  }
+
+  external_position_config.center_raw_deg = PID_RawToDeg(mt6701_raw_angle);
+  external_position_config.center_valid = 1U;
+  ExternalPosition_Rebase();
+  external_position_target_deg = 0.0f;
+  external_position_last_target_ms = HAL_GetTick();
+  if (control_mode == CTRL_MODE_EXTERNAL_POSITION)
+  {
+    weak_pid_target_deg = 0.0f;
+    PID_Reset(&weak_pid);
+  }
+  return 1U;
+}
+
+uint8_t Step42Control_SetExternalPositionTarget(float target_deg)
+{
+  if ((control_mode != CTRL_MODE_EXTERNAL_POSITION) ||
+      (external_position_config.center_valid == 0U) ||
+      (target_deg < external_position_config.minimum_deg) ||
+      (target_deg > external_position_config.maximum_deg))
+  {
+    return 0U;
+  }
+
+  if (motor_user_enabled == 0U)
+  {
+    Step42Control_SetUserEnable(1U);
+  }
+  external_position_target_deg = target_deg;
+  external_position_last_target_ms = HAL_GetTick();
+  weak_pid_enable = 1U;
+  return 1U;
+}
+
+float Step42Control_GetExternalPositionTargetDeg(void)
+{
+  return external_position_target_deg;
+}
+
+float Step42Control_GetExternalPositionCurrentDeg(void)
+{
+  return external_position_current_deg;
 }
 
 void Step42Control_SetThermalLockout(uint8_t lockout)
