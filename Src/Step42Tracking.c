@@ -5,6 +5,8 @@
 #define TRACK_DEFAULT_SPEED_PERCENT (100U)
 #define TRACK_DEFAULT_ACCEL_PERCENT (100U)
 #define TRACK_DEFAULT_FREQUENCY_KHZ (1U)
+#define TRACK_MAX_SPEED_PPS (10000.0f)
+#define TRACK_MAX_ACCEL_PPS2 (30000.0f)
 
 static Step42TrackingConfig_t config;
 static PID_t single_pid;
@@ -39,12 +41,12 @@ static float AbsF(float value)
 
 float Step42Tracking_GetMaxSpeed(void)
 {
-    return (float)config.speed_percent * 50.0f;
+    return (float)config.speed_percent * (TRACK_MAX_SPEED_PPS / 100.0f);
 }
 
 float Step42Tracking_GetAccel(void)
 {
-    return (float)config.accel_percent * 100.0f;
+    return (float)config.accel_percent * (TRACK_MAX_ACCEL_PPS2 / 100.0f);
 }
 
 static void ApplyPidConfig(PID_t *pid,

@@ -272,10 +272,21 @@ class AngleViewer(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Step42 闭环步进驱动控制中心")
-        # This is deliberately a fixed desktop-tool layout so packaged EXEs
-        # keep the same usable proportions on every production computer.
-        self.geometry("1600x980")
-        self.resizable(False, False)
+        # Keep the full desktop layout on large displays, but never create a
+        # window taller than the usable desktop. The content frame can scroll
+        # on 1080p / high-DPI displays instead of cutting off the waveform.
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        window_width = min(1600, max(1120, screen_width - 32))
+        window_height = min(980, max(720, screen_height - 72))
+        self.geometry(f"{window_width}x{window_height}")
+        self.minsize(min(1120, window_width), min(720, window_height))
+        self.resizable(True, True)
+        self._content_canvas = None
+        self._content_scrollbar = None
+        self._content_window = None
+        self._content_root = None
+        self._content_scroll_needed = False
 
         self.frame_queue = queue.Queue()
         self.status_queue = queue.Queue()
@@ -581,8 +592,8 @@ class AngleViewer(tk.Tk):
         ttk.Combobox(tracking, textvariable=self.track_mode_var,
                      values=list(TRACK_MODE_LABELS.keys()), width=12,
                      state="readonly").grid(row=0, column=0, padx=8, pady=6)
-        for col, (label, var) in enumerate((("速度%", self.track_speed_pct_var),
-                                            ("加速度%", self.track_accel_pct_var),
+        for col, (label, var) in enumerate((("速度%(10000)", self.track_speed_pct_var),
+                                            ("加速度%(30000)", self.track_accel_pct_var),
                                             ("频率kHz", self.track_freq_var))):
             ttk.Label(tracking, text=label).grid(row=0, column=1 + col * 2, padx=(4, 2), pady=6)
             ttk.Entry(tracking, textvariable=var, width=6).grid(row=0, column=2 + col * 2, padx=(0, 6), pady=6)
@@ -629,8 +640,18 @@ class AngleViewer(tk.Tk):
         self.wave_canvas.bind("<Configure>", lambda _event: self._redraw_waveform())
 
     def _build_ui(self):
-        root = ttk.Frame(self, padding=10)
-        root.pack(fill=tk.BOTH, expand=True)
+        self._content_canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
+        self._content_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._content_scrollbar = ttk.Scrollbar(
+            self, orient=tk.VERTICAL, command=self._content_canvas.yview)
+        root = ttk.Frame(self._content_canvas, padding=10)
+        self._content_root = root
+        self._content_window = self._content_canvas.create_window(
+            (0, 0), window=root, anchor=tk.NW)
+        self._content_canvas.configure(yscrollcommand=self._content_scrollbar.set)
+        root.bind("<Configure>", self._on_content_root_configure)
+        self._content_canvas.bind("<Configure>", self._on_content_canvas_configure)
+        self.bind_all("<MouseWheel>", self._on_content_mousewheel, add="+")
         root.columnconfigure(0, weight=0, minsize=190)
         root.columnconfigure(1, weight=1)
         root.columnconfigure(2, weight=0)
@@ -792,10 +813,10 @@ class AngleViewer(tk.Tk):
         ttk.Label(tracking_base, text="频率 kHz").grid(row=0, column=2, sticky=tk.W)
         ttk.Entry(tracking_base, textvariable=self.track_freq_var, width=5).grid(
             row=0, column=3, sticky=tk.W, padx=(4, 0))
-        ttk.Label(tracking_base, text="速度%(5000)").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        ttk.Label(tracking_base, text="速度%(10000)").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
         ttk.Entry(tracking_base, textvariable=self.track_speed_pct_var, width=5).grid(
             row=1, column=1, sticky=tk.W, padx=(4, 6), pady=(5, 0))
-        ttk.Label(tracking_base, text="加速度%(10000)").grid(row=1, column=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(tracking_base, text="加速度%(30000)").grid(row=1, column=2, sticky=tk.W, pady=(5, 0))
         ttk.Entry(tracking_base, textvariable=self.track_accel_pct_var, width=5).grid(
             row=1, column=3, sticky=tk.W, padx=(4, 0), pady=(5, 0))
         ttk.Button(tracking_base, text="写入", command=self.send_track_basic).grid(
@@ -937,6 +958,43 @@ class AngleViewer(tk.Tk):
         self.wave_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.wave_canvas.configure(xscrollcommand=self.wave_scroll.set)
         self.wave_canvas.bind("<Configure>", lambda _event: self._redraw_waveform())
+
+    def _on_content_root_configure(self, _event=None):
+        if self._content_canvas is None or self._content_root is None:
+            return
+        self._content_canvas.configure(
+            scrollregion=(0, 0, self._content_root.winfo_reqwidth(),
+                          self._content_root.winfo_reqheight()))
+        self.after_idle(self._refresh_content_scrollbar)
+
+    def _on_content_canvas_configure(self, event):
+        if self._content_canvas is None or self._content_window is None:
+            return
+        self._content_canvas.itemconfigure(self._content_window, width=event.width)
+        self.after_idle(self._refresh_content_scrollbar)
+
+    def _refresh_content_scrollbar(self):
+        if self._content_canvas is None or self._content_root is None:
+            return
+        required_height = self._content_root.winfo_reqheight()
+        visible_height = self._content_canvas.winfo_height()
+        needed = required_height > visible_height + 2
+        if needed == self._content_scroll_needed:
+            return
+        self._content_scroll_needed = needed
+        if needed:
+            self._content_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        else:
+            self._content_scrollbar.pack_forget()
+            self._content_canvas.yview_moveto(0.0)
+
+    def _on_content_mousewheel(self, event):
+        if not self._content_scroll_needed or self._content_canvas is None:
+            return None
+        if event.delta:
+            self._content_canvas.yview_scroll(int(-event.delta / 120), "units")
+            return "break"
+        return None
 
     def _sequence_command_changed(self, _event=None):
         if self.sequence_param_frame is None:
@@ -1528,8 +1586,8 @@ class AngleViewer(tk.Tk):
             return
         if self._send(CMD_TRACK_CONFIG, struct.pack("<BBBB", mode, speed_pct, accel_pct, frequency)):
             self.track_status_var.set(
-                f"误差PID：已发送 {self.track_mode_var.get()}，速度{speed_pct}%={speed_pct * 50}，"
-                f"加速度{accel_pct}%={accel_pct * 100}，{frequency}kHz"
+                f"误差PID：已发送 {self.track_mode_var.get()}，速度{speed_pct}%={speed_pct * 100}，"
+                f"加速度{accel_pct}%={accel_pct * 300}，{frequency}kHz"
             )
 
     def send_track_pid(self, loop):
