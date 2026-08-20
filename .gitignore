@@ -2,6 +2,9 @@
 MDK-ARM/STM32G431CBT6_test/
 MDK-ARM/Objects/
 MDK-ARM/Listings/
+**/MDK-ARM/STM32G431CBT6_test/
+**/MDK-ARM/Objects/
+**/MDK-ARM/Listings/
 
 # Keil user/session files
 *.uvguix.*
@@ -22,6 +25,10 @@ MDK-ARM/Listings/
 *.htm
 *.lnp
 *.dep
+
+# Keep only intentionally published firmware images.
+!firmware/release/
+!firmware/release/*.hex
 
 # Temporary files
 *.bak
@@ -44,6 +51,8 @@ dist/
 # IDE local settings
 .vscode/
 .idea/
+.mxproject
+**/.mxproject
 
 # Windows temporary files
 Desktop.ini
@@ -61,3 +70,5 @@ app.yaml
 张大头布局.png
 当前布局.png
 按键布局.png
+mt6701_angle_viewer.py
+ui_layout_editor.py
