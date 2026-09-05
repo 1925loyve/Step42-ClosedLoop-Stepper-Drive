@@ -26,6 +26,8 @@ static const uint32_t TMC2209_IHOLD_IRUN_VALUE = 0x00060C04;
 static const uint32_t TMC2209_VACTUAL_VALUE = 0x00000000;
 static uint8_t tmc2209_active_addr = 0U;
 static uint8_t tmc2209_chopper_mode = TMC2209_CHOPPER_SILENT;
+static uint8_t tmc2209_hold_current = 4U;
+static uint8_t tmc2209_run_current = 12U;
 
 static uint8_t TMC2209_MicrostepsToMres(uint16_t microsteps, uint8_t *mres)
 {
@@ -283,6 +285,47 @@ uint8_t Tmc2209_SetChopperMode(uint8_t mode)
 uint8_t Tmc2209_GetChopperMode(void)
 {
     return tmc2209_chopper_mode;
+}
+
+uint8_t Tmc2209_SetCurrent(uint8_t hold_current, uint8_t run_current)
+{
+    uint32_t value;
+    uint32_t read_val = 0U;
+
+    if ((hold_current > 31U) || (run_current == 0U) ||
+        (run_current > 31U) || (hold_current > run_current))
+    {
+        return 0U;
+    }
+
+    value = (6UL << 16) | ((uint32_t)run_current << 8) | hold_current;
+    TMC2209_WriteReg(tmc2209_active_addr, TMC2209_IHOLD_IRUN, value);
+    delay_ms(2);
+    if (TMC2209_ReadReg_Robust(tmc2209_active_addr,
+                               TMC2209_IHOLD_IRUN,
+                               &read_val) == 0U)
+    {
+        return 0U;
+    }
+    if (((read_val & 0x1FU) != hold_current) ||
+        (((read_val >> 8) & 0x1FU) != run_current))
+    {
+        return 0U;
+    }
+
+    tmc2209_hold_current = hold_current;
+    tmc2209_run_current = run_current;
+    return 1U;
+}
+
+uint8_t Tmc2209_GetHoldCurrent(void)
+{
+    return tmc2209_hold_current;
+}
+
+uint8_t Tmc2209_GetRunCurrent(void)
+{
+    return tmc2209_run_current;
 }
 
 uint8_t Tmc2209_InitAuto(uint8_t *detected_addr)

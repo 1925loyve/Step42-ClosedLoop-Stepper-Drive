@@ -142,6 +142,23 @@ int Step42_STM32HAL_SetPID(Step42_STM32HAL_Handle *handle,
     return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
 }
 
+int Step42_STM32HAL_SetCurrent(Step42_STM32HAL_Handle *handle,
+                               uint8_t hold_current,
+                               uint8_t run_current)
+{
+    uint8_t tx[STEP42_MAX_FRAME_SIZE];
+    uint16_t len;
+
+    if (handle == 0)
+    {
+        return STEP42_HAL_BAD_PARAM;
+    }
+
+    len = Step42_BuildSetCurrent(tx, sizeof(tx), ++handle->seq,
+                                 hold_current, run_current);
+    return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
+}
+
 int Step42_STM32HAL_SetStream(Step42_STM32HAL_Handle *handle, uint8_t enable)
 {
     uint8_t tx[STEP42_MAX_FRAME_SIZE];

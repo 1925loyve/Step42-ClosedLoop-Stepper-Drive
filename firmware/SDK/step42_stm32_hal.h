@@ -45,6 +45,9 @@ int Step42_STM32HAL_SetPID(Step42_STM32HAL_Handle *handle,
                            float kd,
                            uint16_t limit,
                            float deadband);
+int Step42_STM32HAL_SetCurrent(Step42_STM32HAL_Handle *handle,
+                               uint8_t hold_current,
+                               uint8_t run_current);
 int Step42_STM32HAL_SetStream(Step42_STM32HAL_Handle *handle, uint8_t enable);
 int Step42_STM32HAL_Query(Step42_STM32HAL_Handle *handle);
 int Step42_STM32HAL_Stop(Step42_STM32HAL_Handle *handle);

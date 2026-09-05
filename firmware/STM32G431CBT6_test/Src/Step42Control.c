@@ -499,6 +499,13 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
   {
     return CTRL_STATUS_RANGE;
   }
+  if (((step->op == STEP42_PROGRAM_OP_POSITION_ABS) ||
+       (step->op == STEP42_PROGRAM_OP_POSITION_REL) ||
+       (step->op == STEP42_PROGRAM_OP_OPEN_STEPS)) &&
+      ((step->speed == 0U) || (step->speed > 5000U) || (step->accel == 0U)))
+  {
+    return CTRL_STATUS_RANGE;
+  }
 
   if (program_running != 0U)
   {
@@ -736,15 +743,35 @@ void Step42Control_ProcessProgram(void)
     switch (step->op)
     {
     case STEP42_PROGRAM_OP_POSITION_ABS:
+    {
+      float kp;
+      float ki;
+      float kd;
+      float limit;
+      float deadband;
+
       (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
       (void)Step42Control_SetClosedAccel((float)step->accel);
+      Step42Control_GetPositionPID(&kp, &ki, &kd, &limit, &deadband);
+      Step42Control_SetPositionPID(kp, ki, kd, (float)step->speed, deadband);
       Step42Control_MoveToAngleByMode(((float)step->value) / 100.0f);
       break;
+    }
     case STEP42_PROGRAM_OP_POSITION_REL:
+    {
+      float kp;
+      float ki;
+      float kd;
+      float limit;
+      float deadband;
+
       (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
       (void)Step42Control_SetClosedAccel((float)step->accel);
+      Step42Control_GetPositionPID(&kp, &ki, &kd, &limit, &deadband);
+      Step42Control_SetPositionPID(kp, ki, kd, (float)step->speed, deadband);
       (void)Step42Control_MoveRelativeAngleByMode(((float)step->value) / 100.0f);
       break;
+    }
     case STEP42_PROGRAM_OP_OPEN_STEPS:
       (void)Step42Control_SetMode(CTRL_MODE_OPEN_POSITION);
       (void)Step42Control_MoveStepsByMode(step->value, (float)step->speed, (float)step->accel);
@@ -2096,6 +2123,21 @@ float Step42Control_GetClosedAccel(void)
 uint8_t Step42Control_GetMotionProfile(void)
 {
   return (uint8_t)Stepper_GetMotionProfile(&Motor_42);
+}
+
+uint8_t Step42Control_SetCurrent(uint8_t hold_current, uint8_t run_current)
+{
+  return Tmc2209_SetCurrent(hold_current, run_current);
+}
+
+uint8_t Step42Control_GetHoldCurrent(void)
+{
+  return Tmc2209_GetHoldCurrent();
+}
+
+uint8_t Step42Control_GetRunCurrent(void)
+{
+  return Tmc2209_GetRunCurrent();
 }
 
 float Step42Control_GetSpeedRpm(void)

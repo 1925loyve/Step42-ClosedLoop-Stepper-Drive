@@ -227,7 +227,7 @@ static int32_t Ctrl_ClampI32(float value)
 
 void Step42Comms_SendQuery(uint8_t seq)
 {
-  uint8_t resp[69];
+  uint8_t resp[71];
   uint16_t angle_cdeg;
   int16_t pid_output;
   float kp;
@@ -302,6 +302,8 @@ void Step42Comms_SendQuery(uint8_t seq)
   resp[66] = Step42Control_GetMotionProfile();
   resp[67] = Step42Control_GetTrackingDirection();
   resp[68] = Step42Control_GetCanNodeId();
+  resp[69] = Step42Control_GetHoldCurrent();
+  resp[70] = Step42Control_GetRunCurrent();
   Ctrl_SendFrame(CTRL_CMD_QUERY, seq, resp, sizeof(resp));
 }
 
@@ -1065,6 +1067,22 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
+  if (cmd == CTRL_CMD_CURRENT)
+  {
+    if (len != 2U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    if (Step42Control_SetCurrent(payload[0], payload[1]) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
+    return;
+  }
+
   if (cmd == CTRL_CMD_TRACK_DIRECTION)
   {
     if (len != 1U)
@@ -1198,6 +1216,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_QUERY:
   case CTRL_CMD_MODE:
   case CTRL_CMD_STOP:
+  case CTRL_CMD_MICROSTEP:
   case CTRL_CMD_TRACK_CONFIG:
   case CTRL_CMD_TRACK_PID:
   case CTRL_CMD_TRACK_ADVANCED:
@@ -1206,6 +1225,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_QUERY:
   case CTRL_CMD_CHOPPER_MODE:
   case CTRL_CMD_MOTION_PROFILE:
+  case CTRL_CMD_CURRENT:
   case CTRL_CMD_TRACK_DIRECTION:
   case CTRL_CMD_SAVE_RUNTIME_CONFIG:
   case CTRL_CMD_CAN_NODE_ID:

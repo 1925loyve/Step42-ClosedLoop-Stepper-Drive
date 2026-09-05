@@ -168,6 +168,24 @@ len = Step42_BuildSetChopperMode(tx, sizeof(tx), ++seq, 1);
 uart_send(tx, len);
 ```
 
+Hold and run current use the TMC2209 `IHOLD`/`IRUN` current-scale values, not
+ampere units. `hold_current` is `0..31`, `run_current` is `1..31`, and hold
+must not exceed run. The actual coil current still depends on `VREF`, the
+sense resistors, and the TMC2209 current formula.
+
+```c
+/* IHOLD=4, IRUN=12 */
+len = Step42_BuildSetCurrent(tx, sizeof(tx), ++seq, 4, 12);
+uart_send(tx, len);
+
+/* STM32 HAL wrapper */
+Step42_STM32HAL_SetCurrent(&motor, 4, 12);
+```
+
+Protocol version 17 appends `hold_current` and `run_current` to Query response
+payload bytes 69 and 70. Older Query replies remain decodable and use the
+default values `4 / 12` when those bytes are absent.
+
 ## DIP Transport Modes
 
 The two switch inputs are sampled once during startup. With `MS1` as the high

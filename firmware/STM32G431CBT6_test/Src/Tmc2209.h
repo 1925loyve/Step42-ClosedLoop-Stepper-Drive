@@ -21,6 +21,9 @@ uint8_t Tmc2209_InitAuto(uint8_t *detected_addr);
 uint8_t Tmc2209_SetMicrosteps(uint16_t microsteps);
 uint8_t Tmc2209_SetChopperMode(uint8_t mode);
 uint8_t Tmc2209_GetChopperMode(void);
+uint8_t Tmc2209_SetCurrent(uint8_t hold_current, uint8_t run_current);
+uint8_t Tmc2209_GetHoldCurrent(void);
+uint8_t Tmc2209_GetRunCurrent(void);
 
 
 #endif
