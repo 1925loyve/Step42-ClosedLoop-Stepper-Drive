@@ -48,6 +48,7 @@ extern "C" {
 #define STEP42_CMD_SAVE_RUNTIME_CONFIG (0x20U)
 #define STEP42_CMD_CAN_NODE_ID      (0x21U)
 #define STEP42_CMD_CURRENT          (0x26U)
+#define STEP42_CMD_SIGNAL_INPUT     (0x27U)
 
 #define STEP42_PROFILE_TRAPEZOID    (0x00U)
 #define STEP42_PROFILE_S_CURVE      (0x01U)
@@ -62,6 +63,10 @@ extern "C" {
 #define STEP42_PROGRAM_OP_STOP         (0x08U)
 #define STEP42_PROGRAM_OP_MICROSTEP    (0x09U)
 #define STEP42_PROGRAM_OP_CHOPPER      (0x0AU)
+#define STEP42_PROGRAM_OP_EXTERNAL_POSITION (0x0BU)
+#define STEP42_PROGRAM_OP_DRIVE_STATE  (0x0CU)
+#define STEP42_PROGRAM_OP_GOTO         (0x0DU)
+#define STEP42_PROGRAM_OP_BRANCH       (0x0EU)
 #define STEP42_PROGRAM_SPEED_FLAG_RPM  (0x01U)
 
 #define STEP42_STATUS_OK            (0x00U)
@@ -238,6 +243,10 @@ uint16_t Step42_BuildTrackAdvanced(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                   float inner_deadband);
 uint16_t Step42_BuildTrackInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                float primary_error, float secondary_feedback);
+uint16_t Step42_BuildSignalInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                                uint8_t target_detected, uint8_t custom1,
+                                uint8_t custom2, float primary_error,
+                                float secondary_feedback);
 uint16_t Step42_BuildTrackDefaults(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildSetChopperMode(uint8_t *buf, uint16_t max_len,

@@ -11,6 +11,7 @@
 #define DEFAULT_CLOSED_ACCEL_STEPS (3000.0f)
 #define WEAK_PID_ACCEL_STEPS DEFAULT_CLOSED_ACCEL_STEPS
 #define MOTOR_BASE_STEPS_PER_REV (200.0f)
+#define STEP42_MAX_PULSE_SPEED (5000.0f)
 #define OPEN_POSITION_MAX_SPEED (2500.0f)
 #define OPEN_POSITION_ACCEL (5000.0f)
 #define STEP42_CFG_MAGIC (0x42323453UL)
@@ -18,7 +19,7 @@
 #define STEP42_CFG_ADDR (FLASH_BASE + FLASH_SIZE - FLASH_PAGE_SIZE)
 #define STEP42_CFG_FLASH_PAGE (FLASH_PAGE_NB - 1U)
 #define STEP42_PROGRAM_MAGIC (0x50473432UL)
-#define STEP42_PROGRAM_VERSION (1UL)
+#define STEP42_PROGRAM_VERSION (2UL)
 #define STEP42_PROGRAM_CFG_ADDR (FLASH_BASE + FLASH_SIZE - (2UL * FLASH_PAGE_SIZE))
 #define STEP42_PROGRAM_FLASH_PAGE (FLASH_PAGE_NB - 2U)
 #define STEP42_FLASH_WRITE_GUARD_MS (2000UL)
@@ -189,6 +190,9 @@ static uint8_t program_count = 0U;
 static uint8_t program_ready = 0U;
 static uint8_t program_editing = 0U;
 static uint8_t program_save_armed = 0U;
+static volatile uint8_t program_target_detected = 0U;
+static volatile uint8_t program_custom_signal1 = 0U;
+static volatile uint8_t program_custom_signal2 = 0U;
 static Step42ExternalPositionConfig_t external_position_config;
 static volatile float external_position_current_deg = 0.0f;
 static volatile float external_position_target_deg = 0.0f;
@@ -211,6 +215,9 @@ static uint32_t ConfigV2_CalcCrc(const Step42FlashConfigV2_t *cfg);
 static void Program_Load(void);
 static void Program_CaptureRuntime(void);
 static void Program_RestoreRuntime(void);
+static uint8_t Program_ConditionMet(const Step42ProgramStep_t *step);
+static void Program_Jump(uint8_t index);
+static uint8_t Program_ApplyDriveState(const Step42ProgramStep_t *step);
 static void ExternalPosition_ResetDefaults(void);
 static void ExternalPosition_Rebase(void);
 static float ExternalPosition_UpdateCurrent(uint16_t raw_angle);
@@ -479,7 +486,15 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
 {
   if ((step == 0) || (index >= STEP42_PROGRAM_MAX_STEPS) ||
       (step->op < STEP42_PROGRAM_OP_POSITION_ABS) ||
-      (step->op > STEP42_PROGRAM_OP_EXTERNAL_POSITION))
+      (step->op > STEP42_PROGRAM_OP_BRANCH))
+  {
+    return CTRL_STATUS_RANGE;
+  }
+
+  if ((step->condition > STEP42_PROGRAM_CONDITION_SIGNAL_FALSE) ||
+      ((step->condition != STEP42_PROGRAM_CONDITION_NONE) &&
+       ((step->signal > STEP42_PROGRAM_SIGNAL_CUSTOM2) ||
+        (step->jump_index >= STEP42_PROGRAM_MAX_STEPS))))
   {
     return CTRL_STATUS_RANGE;
   }
@@ -506,6 +521,45 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
   {
     return CTRL_STATUS_RANGE;
   }
+  if (step->op == STEP42_PROGRAM_OP_DRIVE_STATE)
+  {
+    if ((step->flags & (uint8_t)~0x0FU) != 0U)
+    {
+      return CTRL_STATUS_RANGE;
+    }
+    if (((step->flags & STEP42_PROGRAM_STATE_MODE) != 0U) &&
+        ((step->value < CTRL_MODE_OPEN_POSITION) ||
+         (step->value > CTRL_MODE_EXTERNAL_POSITION)))
+    {
+      return CTRL_STATUS_RANGE;
+    }
+    if (((step->flags & STEP42_PROGRAM_STATE_MICROSTEP) != 0U) &&
+        (step->speed != 1U) && (step->speed != 2U) &&
+        (step->speed != 4U) && (step->speed != 8U) &&
+        (step->speed != 16U) && (step->speed != 32U) &&
+        (step->speed != 64U) && (step->speed != 128U) &&
+        (step->speed != 256U))
+    {
+      return CTRL_STATUS_RANGE;
+    }
+    if ((((step->flags & STEP42_PROGRAM_STATE_CHOPPER) != 0U) &&
+         (step->accel > 1U)) ||
+        (((step->flags & STEP42_PROGRAM_STATE_PROFILE) != 0U) &&
+         (step->duration_ms > 1U)))
+    {
+      return CTRL_STATUS_RANGE;
+    }
+  }
+  if ((step->op == STEP42_PROGRAM_OP_BRANCH) &&
+      (step->condition == STEP42_PROGRAM_CONDITION_NONE))
+  {
+    return CTRL_STATUS_RANGE;
+  }
+  if ((step->op == STEP42_PROGRAM_OP_GOTO) &&
+      ((step->value < 0) || (step->value >= (int32_t)STEP42_PROGRAM_MAX_STEPS)))
+  {
+    return CTRL_STATUS_RANGE;
+  }
 
   if (program_running != 0U)
   {
@@ -520,13 +574,28 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
 
 uint8_t Step42Control_StageProgram(uint8_t count)
 {
-  if (count > STEP42_PROGRAM_MAX_STEPS)
+  uint8_t i;
+
+  if ((count == 0U) || (count > STEP42_PROGRAM_MAX_STEPS))
   {
     return CTRL_STATUS_RANGE;
   }
   if (program_running != 0U)
   {
     return CTRL_STATUS_BUSY;
+  }
+
+  for (i = 0U; i < count; i++)
+  {
+    const Step42ProgramStep_t *step = &program_steps[i];
+
+    if (((step->condition != STEP42_PROGRAM_CONDITION_NONE) &&
+         (step->jump_index >= count)) ||
+        ((step->op == STEP42_PROGRAM_OP_GOTO) &&
+         ((step->value < 0) || (step->value >= count))))
+    {
+      return CTRL_STATUS_RANGE;
+    }
   }
 
   program_count = count;
@@ -716,6 +785,93 @@ static void Program_Advance(void)
   }
 }
 
+static uint8_t Program_ConditionMet(const Step42ProgramStep_t *step)
+{
+  uint8_t signal_value;
+
+  if ((step == 0) || (step->condition == STEP42_PROGRAM_CONDITION_NONE))
+  {
+    return 0U;
+  }
+  if (step->signal == STEP42_PROGRAM_SIGNAL_TARGET)
+  {
+    signal_value = program_target_detected;
+  }
+  else if (step->signal == STEP42_PROGRAM_SIGNAL_CUSTOM1)
+  {
+    signal_value = program_custom_signal1;
+  }
+  else
+  {
+    signal_value = program_custom_signal2;
+  }
+
+  if (step->condition == STEP42_PROGRAM_CONDITION_SIGNAL_TRUE)
+  {
+    return (signal_value != 0U) ? 1U : 0U;
+  }
+  return (signal_value == 0U) ? 1U : 0U;
+}
+
+static void Program_Jump(uint8_t index)
+{
+  if (index >= program_count)
+  {
+    program_running = 0U;
+    Step42Control_StopMotion();
+    return;
+  }
+
+  Step42Control_StopMotion();
+  program_index = index;
+  program_step_started = 0U;
+}
+
+static uint8_t Program_ApplyDriveState(const Step42ProgramStep_t *step)
+{
+  uint8_t target_mode = control_mode;
+
+  if ((step->flags & STEP42_PROGRAM_STATE_MODE) != 0U)
+  {
+    target_mode = (uint8_t)step->value;
+  }
+  if (((step->flags & STEP42_PROGRAM_STATE_MICROSTEP) != 0U) &&
+      (target_mode == CTRL_MODE_TRACK_PID) && (step->speed != 32U))
+  {
+    return 0U;
+  }
+  if (((step->flags & STEP42_PROGRAM_STATE_MICROSTEP) != 0U) &&
+      ((control_mode == CTRL_MODE_TRACK_PID) ||
+       (control_mode == CTRL_MODE_EXTERNAL_POSITION)))
+  {
+    if (Step42Control_SetMode(CTRL_MODE_OPEN_POSITION) == 0U)
+    {
+      return 0U;
+    }
+  }
+  if (((step->flags & STEP42_PROGRAM_STATE_MICROSTEP) != 0U) &&
+      (Step42Control_SetMicrosteps(step->speed) == 0U))
+  {
+    return 0U;
+  }
+  if (((step->flags & STEP42_PROGRAM_STATE_CHOPPER) != 0U) &&
+      (Tmc2209_SetChopperMode((uint8_t)step->accel) == 0U))
+  {
+    return 0U;
+  }
+  if (((step->flags & STEP42_PROGRAM_STATE_PROFILE) != 0U) &&
+      (Step42Control_SetMotionProfile((uint8_t)step->duration_ms) == 0U))
+  {
+    return 0U;
+  }
+  if ((control_mode != target_mode) &&
+      (Step42Control_SetMode(target_mode) == 0U))
+  {
+    return 0U;
+  }
+  return 1U;
+}
+
 void Step42Control_ProcessProgram(void)
 {
   Step42ProgramStep_t *step;
@@ -734,6 +890,12 @@ void Step42Control_ProcessProgram(void)
 
   step = &program_steps[program_index];
   elapsed = (uint32_t)(HAL_GetTick() - program_step_start_ms);
+  if ((step->op != STEP42_PROGRAM_OP_BRANCH) &&
+      (Program_ConditionMet(step) != 0U))
+  {
+    Program_Jump(step->jump_index);
+    return;
+  }
   if (program_step_started == 0U)
   {
     program_step_started = 1U;
@@ -813,6 +975,7 @@ void Step42Control_ProcessProgram(void)
       (void)Step42Control_SetMode(CTRL_MODE_TRACK_PID);
       Step42Control_SetTrackingInput(((float)step->value) / 100.0f, 0.0f);
       break;
+    }
     case STEP42_PROGRAM_OP_EXTERNAL_POSITION:
       if (Step42Control_SetMode(CTRL_MODE_EXTERNAL_POSITION) == 0U)
       {
@@ -821,7 +984,6 @@ void Step42Control_ProcessProgram(void)
         return;
       }
       break;
-    }
     case STEP42_PROGRAM_OP_STOP:
       Step42Control_StopMotion();
       break;
@@ -835,8 +997,31 @@ void Step42Control_ProcessProgram(void)
     case STEP42_PROGRAM_OP_CHOPPER:
       (void)Tmc2209_SetChopperMode(step->flags);
       break;
-    default:
+    case STEP42_PROGRAM_OP_DRIVE_STATE:
+      if (Program_ApplyDriveState(step) == 0U)
+      {
+        program_running = 0U;
+        Step42Control_StopMotion();
+        return;
+      }
       break;
+    case STEP42_PROGRAM_OP_GOTO:
+      Program_Jump((uint8_t)step->value);
+      return;
+    case STEP42_PROGRAM_OP_BRANCH:
+      if (Program_ConditionMet(step) != 0U)
+      {
+        Program_Jump(step->jump_index);
+      }
+      else
+      {
+        Program_Advance();
+      }
+      return;
+    default:
+      program_running = 0U;
+      Step42Control_StopMotion();
+      return;
     }
   }
 
@@ -859,7 +1044,8 @@ void Step42Control_ProcessProgram(void)
   }
   else if ((step->op == STEP42_PROGRAM_OP_STOP) ||
            (step->op == STEP42_PROGRAM_OP_MICROSTEP) ||
-           (step->op == STEP42_PROGRAM_OP_CHOPPER))
+           (step->op == STEP42_PROGRAM_OP_CHOPPER) ||
+           (step->op == STEP42_PROGRAM_OP_DRIVE_STATE))
   {
     Program_Advance();
   }
@@ -1738,6 +1924,10 @@ uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
 
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband)
 {
+  if (output_limit > STEP42_MAX_PULSE_SPEED)
+  {
+    output_limit = STEP42_MAX_PULSE_SPEED;
+  }
   PID_Init(&weak_pid, kp, ki, kd, 0.001f, output_limit, 20.0f, deadband);
 }
 
@@ -2202,6 +2392,15 @@ void Step42Control_SetTrackingInput(float primary_error, float secondary_feedbac
     primary_error = -primary_error;
   }
   Step42Tracking_SetInput(primary_error, secondary_feedback);
+}
+
+void Step42Control_SetProgramSignals(uint8_t target_detected,
+                                     uint8_t custom1,
+                                     uint8_t custom2)
+{
+  program_target_detected = (target_detected != 0U) ? 1U : 0U;
+  program_custom_signal1 = (custom1 != 0U) ? 1U : 0U;
+  program_custom_signal2 = (custom2 != 0U) ? 1U : 0U;
 }
 
 void Step42Control_SetTrackingDirection(uint8_t reverse)

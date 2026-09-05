@@ -424,6 +424,7 @@ static uint8_t Ctrl_IsProgramModeAllowed(uint8_t cmd)
   /* Tracking input is sensor data, not an external motion command. It must
      remain available while a program-owned tracking step is running. */
   case CTRL_CMD_TRACK_INPUT:
+  case CTRL_CMD_SIGNAL_INPUT:
   /* Same rule for the continuous-position target supplied by a vision host. */
   case CTRL_CMD_EXTERNAL_POSITION_TARGET:
   case CTRL_CMD_TRACK_QUERY:
@@ -613,7 +614,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       limit = Step42Slave_ReadU16(payload + 6U);
       dead_x1000 = Step42Slave_ReadU16(payload + 8U);
     }
-    if ((limit < 1U) || (dead_x1000 > 10000U))
+    if ((limit < 1U) || (limit > 5000U) || (dead_x1000 > 10000U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;
@@ -1137,18 +1138,67 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
   {
     Step42ProgramStep_t step;
 
-    if (len != 13U)
+    if ((len != 13U) && (len != 16U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
+    memset(&step, 0, sizeof(step));
     step.op = payload[1];
     step.flags = payload[2];
-    step.speed = Step42Slave_ReadU16(payload + 3U);
-    step.accel = Step42Slave_ReadU16(payload + 5U);
-    step.duration_ms = Step42Slave_ReadU16(payload + 7U);
-    step.value = Ctrl_ReadI32(payload + 9U);
+    step.jump_index = STEP42_PROGRAM_JUMP_NONE;
+    if (len == 16U)
+    {
+      step.condition = payload[3];
+      step.signal = payload[4];
+      step.jump_index = payload[5];
+      step.speed = Step42Slave_ReadU16(payload + 6U);
+      step.accel = Step42Slave_ReadU16(payload + 8U);
+      step.duration_ms = Step42Slave_ReadU16(payload + 10U);
+      step.value = Ctrl_ReadI32(payload + 12U);
+    }
+    else
+    {
+      step.speed = Step42Slave_ReadU16(payload + 3U);
+      step.accel = Step42Slave_ReadU16(payload + 5U);
+      step.duration_ms = Step42Slave_ReadU16(payload + 7U);
+      step.value = Ctrl_ReadI32(payload + 9U);
+    }
     Ctrl_SendStatus(cmd, seq, Step42Control_SetProgramStep(payload[0], &step));
+    return;
+  }
+
+  if (cmd == CTRL_CMD_SIGNAL_INPUT)
+  {
+    uint8_t signals;
+    int32_t primary;
+    int32_t secondary;
+
+    if (len != 9U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
+      return;
+    }
+    signals = payload[0];
+    primary = Ctrl_ReadI32(payload + 1U);
+    secondary = Ctrl_ReadI32(payload + 5U);
+    if (((signals & (uint8_t)~0x07U) != 0U) ||
+        (primary < -100000) || (primary > 100000) ||
+        (secondary < -100000) || (secondary > 100000))
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    Step42Control_SetProgramSignals(signals & 0x01U,
+                                    signals & 0x02U,
+                                    signals & 0x04U);
+    if (Step42Control_GetMode() == CTRL_MODE_TRACK_PID)
+    {
+      Step42Control_SetTrackingInput(((float)primary) / 100.0f,
+                                     ((float)secondary) / 100.0f);
+      Step42Control_MarkExternalTask();
+    }
+    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
     return;
   }
 
@@ -1221,6 +1271,7 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_PID:
   case CTRL_CMD_TRACK_ADVANCED:
   case CTRL_CMD_TRACK_INPUT:
+  case CTRL_CMD_SIGNAL_INPUT:
   case CTRL_CMD_TRACK_DEFAULT:
   case CTRL_CMD_TRACK_QUERY:
   case CTRL_CMD_CHOPPER_MODE:

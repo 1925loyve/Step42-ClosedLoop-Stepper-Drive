@@ -13,7 +13,7 @@ extern "C" {
 
 extern Stepper_t Motor_42;
 
-#define STEP42_PROGRAM_MAX_STEPS (8U)
+#define STEP42_PROGRAM_MAX_STEPS (32U)
 
 #define STEP42_PROGRAM_OP_POSITION_ABS (1U)
 #define STEP42_PROGRAM_OP_POSITION_REL (2U)
@@ -26,13 +26,33 @@ extern Stepper_t Motor_42;
 #define STEP42_PROGRAM_OP_MICROSTEP    (9U)
 #define STEP42_PROGRAM_OP_CHOPPER      (10U)
 #define STEP42_PROGRAM_OP_EXTERNAL_POSITION (11U)
+#define STEP42_PROGRAM_OP_DRIVE_STATE  (12U)
+#define STEP42_PROGRAM_OP_GOTO         (13U)
+#define STEP42_PROGRAM_OP_BRANCH       (14U)
 
 #define STEP42_PROGRAM_SPEED_FLAG_RPM  (0x01U)
+#define STEP42_PROGRAM_STATE_MODE      (0x01U)
+#define STEP42_PROGRAM_STATE_MICROSTEP (0x02U)
+#define STEP42_PROGRAM_STATE_CHOPPER   (0x04U)
+#define STEP42_PROGRAM_STATE_PROFILE   (0x08U)
+
+#define STEP42_PROGRAM_CONDITION_NONE         (0U)
+#define STEP42_PROGRAM_CONDITION_SIGNAL_TRUE  (1U)
+#define STEP42_PROGRAM_CONDITION_SIGNAL_FALSE (2U)
+
+#define STEP42_PROGRAM_SIGNAL_TARGET  (0U)
+#define STEP42_PROGRAM_SIGNAL_CUSTOM1 (1U)
+#define STEP42_PROGRAM_SIGNAL_CUSTOM2 (2U)
+#define STEP42_PROGRAM_JUMP_NONE      (0xFFU)
 
 typedef struct
 {
   uint8_t op;
   uint8_t flags;
+  uint8_t condition;
+  uint8_t signal;
+  uint8_t jump_index;
+  uint8_t reserved;
   uint16_t speed;
   uint16_t accel;
   uint16_t duration_ms;
@@ -110,6 +130,9 @@ uint8_t Step42Control_SetTrackingAdvanced(float filter_alpha,
                                           float outer_deadband,
                                           float inner_deadband);
 void Step42Control_SetTrackingInput(float primary_error, float secondary_feedback);
+void Step42Control_SetProgramSignals(uint8_t target_detected,
+                                     uint8_t custom1,
+                                     uint8_t custom2);
 void Step42Control_SetTrackingDirection(uint8_t reverse);
 uint8_t Step42Control_GetTrackingDirection(void);
 void Step42Control_ResetTrackingDefaults(void);
