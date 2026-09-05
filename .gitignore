@@ -60,6 +60,8 @@ $RECYCLE.BIN/
 
 # local virtual environents
 .venv/
+.venv_qt/
+.venv_qt311/
 venv/
 env/
 
@@ -72,3 +74,6 @@ app.yaml
 按键布局.png
 mt6701_angle_viewer.py
 ui_layout_editor.py
+step42_qt_core.py
+step42_upper_computer_qt.py
+qt_ui_preview/
