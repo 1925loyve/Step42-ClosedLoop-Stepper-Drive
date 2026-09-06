@@ -17,9 +17,10 @@ baud rate required by the firmware documentation.
 
 Open the `Settings` page and choose either OpenAI Responses API or an
 OpenAI-compatible Chat Completions endpoint. Enter the endpoint, a model that
-supports function calling, and the API key, then use the `AI Assistant` page.
-The endpoint and model can be saved locally; the API key remains in process
-memory and is not written to disk.
+supports function calling, and the API key, then save it as a named interface.
+The API key is encrypted with Windows DPAPI for the current Windows account.
+After saving, its fields are locked and the key is never displayed again; the
+saved interface can only be selected, renamed, or deleted.
 
 The AI is limited to one connected motor and validated RAM operations. It has
 no tool for Flash writes, firmware updates, factory commands, or disabling the
