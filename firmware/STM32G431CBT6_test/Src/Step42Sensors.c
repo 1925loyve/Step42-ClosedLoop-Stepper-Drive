@@ -9,8 +9,8 @@
 #define TEMP_NTC_R25_OHM (10000.0f)
 #define TEMP_NTC_BETA (3450.0f)
 #define TEMP_T25_K (298.15f)
-#define TEMP_WARNING_C (70.0f)
-#define TEMP_SHUTDOWN_C (85.0f)
+#define TEMP_WARNING_C (55.0f)
+#define TEMP_SHUTDOWN_C (65.0f)
 #define TEMP_HYSTERESIS_C (5.0f)
 
 extern ADC_HandleTypeDef hadc1;

@@ -31,6 +31,12 @@
 #define CLOSED_POSITION_LIMIT_DEG (7200.0f)
 #define STEP42_CAN_NODE_ID_MIN (1U)
 #define STEP42_CAN_NODE_ID_MAX (31U)
+#define STALL_COMMAND_MIN_RPM (15.0f)
+#define STALL_MIN_FEEDBACK_RPM (2.0f)
+#define STALL_FEEDBACK_RATIO (0.12f)
+#define STALL_POSITION_ERROR_DEG (1.0f)
+#define STALL_STARTUP_GRACE_MS (300U)
+#define STALL_CONFIRM_MS (500U)
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim6;
@@ -180,6 +186,7 @@ static float speed_accum_time_s = 0.0f;
 static float motor_speed_rpm = 0.0f;
 static uint8_t thermal_lockout = 0U;
 static uint8_t stall_fault = 0U;
+static uint16_t stall_motion_age_ms = 0U;
 static uint16_t stall_elapsed_ms = 0U;
 static uint8_t external_task_marked = 0U;
 static uint8_t tracking_error_reverse = 0U;
@@ -224,6 +231,7 @@ static float ExternalPosition_UpdateCurrent(uint16_t raw_angle);
 static void ExternalPosition_ApplyConfig(void);
 static void ExternalPosition_CaptureRuntime(void);
 static void ExternalPosition_RestoreRuntime(void);
+static void StallProtection_Update(void);
 
 static float AbsF(float value)
 {
@@ -1543,6 +1551,7 @@ void Step42Control_SetUserEnable(uint8_t enable)
   if (enable != 0U)
   {
     stall_fault = 0U;
+    stall_motion_age_ms = 0U;
     stall_elapsed_ms = 0U;
     if (thermal_lockout != 0U)
     {
@@ -1551,28 +1560,6 @@ void Step42Control_SetUserEnable(uint8_t enable)
       return;
     }
     Motor_EnableOutput();
-    /* Conservative encoder-based stall protection. DIAG is not routed on
-       this board, so only a sustained zero-speed condition is actionable. */
-    if ((motor_user_enabled != 0U) && (Motor_42.state != STOP) &&
-        ((AbsF(Motor_42.current_speed) * 60.0f / motor_steps_per_rev) >= 50.0f) &&
-        (AbsF(motor_speed_rpm) < 2.0f))
-    {
-      if (stall_elapsed_ms < 1000U)
-      {
-        stall_elapsed_ms++;
-      }
-      if (stall_elapsed_ms >= 350U)
-      {
-        stall_fault = 1U;
-        Step42Control_StopMotion();
-        Step42Control_SetUserEnable(0U);
-      }
-    }
-    else
-    {
-      stall_elapsed_ms = 0U;
-    }
-
     if (control_mode == CTRL_MODE_CLOSED_POSITION)
     {
       weak_pid_target_deg = mt6701_unwrapped_deg;
@@ -2161,6 +2148,78 @@ uint8_t Step42Control_IsStallFault(void)
   return stall_fault;
 }
 
+static void StallProtection_Update(void)
+{
+  float commanded_steps_per_s;
+  float commanded_rpm;
+  float feedback_limit_rpm;
+  uint8_t monitored_mode;
+
+  monitored_mode = ((control_mode == CTRL_MODE_OPEN_SPEED) ||
+                    (control_mode == CTRL_MODE_OPEN_POSITION) ||
+                    (control_mode == CTRL_MODE_CLOSED_POSITION) ||
+                    (control_mode == CTRL_MODE_TRACK_PID) ||
+                    (control_mode == CTRL_MODE_EXTERNAL_POSITION)) ? 1U : 0U;
+  if ((motor_user_enabled == 0U) || (monitored_mode == 0U) ||
+      (Motor_42.state == STOP) || (motor_steps_per_rev < 1.0f))
+  {
+    stall_motion_age_ms = 0U;
+    stall_elapsed_ms = 0U;
+    return;
+  }
+
+  if (Motor_42.run_mode == MODE_POSITION)
+  {
+    commanded_steps_per_s = (Motor_42.step_delay > 0U) ?
+                            ((float)Motor_42.timer_freq / (float)Motor_42.step_delay) : 0.0f;
+  }
+  else
+  {
+    commanded_steps_per_s = AbsF(Motor_42.current_speed);
+  }
+  commanded_rpm = commanded_steps_per_s * 60.0f / motor_steps_per_rev;
+
+  if ((commanded_rpm < STALL_COMMAND_MIN_RPM) ||
+      ((control_mode == CTRL_MODE_CLOSED_POSITION) &&
+       (AbsF(Step42Control_GetPositionErrorDeg()) < STALL_POSITION_ERROR_DEG)))
+  {
+    stall_motion_age_ms = 0U;
+    stall_elapsed_ms = 0U;
+    return;
+  }
+
+  if (stall_motion_age_ms < STALL_STARTUP_GRACE_MS)
+  {
+    stall_motion_age_ms++;
+    stall_elapsed_ms = 0U;
+    return;
+  }
+
+  feedback_limit_rpm = commanded_rpm * STALL_FEEDBACK_RATIO;
+  if (feedback_limit_rpm < STALL_MIN_FEEDBACK_RPM)
+  {
+    feedback_limit_rpm = STALL_MIN_FEEDBACK_RPM;
+  }
+
+  if (AbsF(motor_speed_rpm) <= feedback_limit_rpm)
+  {
+    if (stall_elapsed_ms < STALL_CONFIRM_MS)
+    {
+      stall_elapsed_ms++;
+    }
+    if (stall_elapsed_ms >= STALL_CONFIRM_MS)
+    {
+      stall_fault = 1U;
+      Step42Control_StopMotion();
+      Step42Control_SetUserEnable(0U);
+    }
+  }
+  else
+  {
+    stall_elapsed_ms = 0U;
+  }
+}
+
 uint8_t Step42Control_TimerTick1kHz(void)
 {
   uint16_t raw_angle = 0U;
@@ -2233,6 +2292,8 @@ uint8_t Step42Control_TimerTick1kHz(void)
       }
     }
   }
+
+  StallProtection_Update();
 
   return 1U;
 }
