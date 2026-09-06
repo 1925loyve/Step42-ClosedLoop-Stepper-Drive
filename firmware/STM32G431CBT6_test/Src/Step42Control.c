@@ -37,6 +37,8 @@
 #define STALL_POSITION_ERROR_DEG (1.0f)
 #define STALL_STARTUP_GRACE_MS (300U)
 #define STALL_CONFIRM_MS (500U)
+#define STALL_REVERSE_MIN_RPM (3.0f)
+#define STALL_REVERSE_CONFIRM_MS (250U)
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim6;
@@ -188,6 +190,8 @@ static uint8_t thermal_lockout = 0U;
 static uint8_t stall_fault = 0U;
 static uint16_t stall_motion_age_ms = 0U;
 static uint16_t stall_elapsed_ms = 0U;
+static uint16_t stall_reverse_elapsed_ms = 0U;
+static int8_t stall_command_sign = 0;
 static uint8_t external_task_marked = 0U;
 static uint8_t tracking_error_reverse = 0U;
 static uint8_t can_node_id = STEP42_CAN_NODE_ID_MIN;
@@ -1553,6 +1557,8 @@ void Step42Control_SetUserEnable(uint8_t enable)
     stall_fault = 0U;
     stall_motion_age_ms = 0U;
     stall_elapsed_ms = 0U;
+    stall_reverse_elapsed_ms = 0U;
+    stall_command_sign = 0;
     if (thermal_lockout != 0U)
     {
       Motor_DisableOutput();
@@ -2152,7 +2158,9 @@ static void StallProtection_Update(void)
 {
   float commanded_steps_per_s;
   float commanded_rpm;
+  float following_rpm;
   float feedback_limit_rpm;
+  int8_t command_sign;
   uint8_t monitored_mode;
 
   monitored_mode = ((control_mode == CTRL_MODE_OPEN_SPEED) ||
@@ -2165,6 +2173,8 @@ static void StallProtection_Update(void)
   {
     stall_motion_age_ms = 0U;
     stall_elapsed_ms = 0U;
+    stall_reverse_elapsed_ms = 0U;
+    stall_command_sign = 0;
     return;
   }
 
@@ -2172,12 +2182,14 @@ static void StallProtection_Update(void)
   {
     commanded_steps_per_s = (Motor_42.step_delay > 0U) ?
                             ((float)Motor_42.timer_freq / (float)Motor_42.step_delay) : 0.0f;
+    command_sign = (Motor_42.direction == DIR_REVERSE) ? 1 : -1;
   }
   else
   {
-    commanded_steps_per_s = AbsF(Motor_42.current_speed);
+    commanded_steps_per_s = Motor_42.current_speed;
+    command_sign = (commanded_steps_per_s >= 0.0f) ? 1 : -1;
   }
-  commanded_rpm = commanded_steps_per_s * 60.0f / motor_steps_per_rev;
+  commanded_rpm = AbsF(commanded_steps_per_s) * 60.0f / motor_steps_per_rev;
 
   if ((commanded_rpm < STALL_COMMAND_MIN_RPM) ||
       ((control_mode == CTRL_MODE_CLOSED_POSITION) &&
@@ -2185,13 +2197,26 @@ static void StallProtection_Update(void)
   {
     stall_motion_age_ms = 0U;
     stall_elapsed_ms = 0U;
+    stall_reverse_elapsed_ms = 0U;
+    stall_command_sign = 0;
     return;
+  }
+
+  /* A requested direction change starts a fresh grace window. This avoids
+     treating the rotor's normal deceleration as reverse motion. */
+  if (command_sign != stall_command_sign)
+  {
+    stall_command_sign = command_sign;
+    stall_motion_age_ms = 0U;
+    stall_elapsed_ms = 0U;
+    stall_reverse_elapsed_ms = 0U;
   }
 
   if (stall_motion_age_ms < STALL_STARTUP_GRACE_MS)
   {
     stall_motion_age_ms++;
     stall_elapsed_ms = 0U;
+    stall_reverse_elapsed_ms = 0U;
     return;
   }
 
@@ -2201,13 +2226,30 @@ static void StallProtection_Update(void)
     feedback_limit_rpm = STALL_MIN_FEEDBACK_RPM;
   }
 
-  if (AbsF(motor_speed_rpm) <= feedback_limit_rpm)
+  /* Positive means the encoder is following the commanded direction;
+     negative means the shaft is moving in the opposite direction. */
+  following_rpm = motor_speed_rpm * (float)command_sign;
+
+  if (following_rpm <= -STALL_REVERSE_MIN_RPM)
+  {
+    if (stall_reverse_elapsed_ms < STALL_REVERSE_CONFIRM_MS)
+    {
+      stall_reverse_elapsed_ms++;
+    }
+  }
+  else
+  {
+    stall_reverse_elapsed_ms = 0U;
+  }
+
+  if (following_rpm <= feedback_limit_rpm)
   {
     if (stall_elapsed_ms < STALL_CONFIRM_MS)
     {
       stall_elapsed_ms++;
     }
-    if (stall_elapsed_ms >= STALL_CONFIRM_MS)
+    if ((stall_elapsed_ms >= STALL_CONFIRM_MS) ||
+        (stall_reverse_elapsed_ms >= STALL_REVERSE_CONFIRM_MS))
     {
       stall_fault = 1U;
       Step42Control_StopMotion();
