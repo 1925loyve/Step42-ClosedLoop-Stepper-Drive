@@ -13,6 +13,8 @@ extern "C" {
 #define STEP42_RESP_SOF2            (0xA5U)
 #define STEP42_MAX_PAYLOAD          (72U)
 #define STEP42_MAX_FRAME_SIZE       (STEP42_MAX_PAYLOAD + 6U)
+#define STEP42_BASE_PULSE_SPEED     (5000U)
+#define STEP42_HARD_MAX_PULSE_SPEED (30000U)
 
 #define STEP42_CMD_PING             (0x01U)
 #define STEP42_CMD_ENABLE           (0x02U)
@@ -182,6 +184,7 @@ typedef struct
 } Step42_Telemetry;
 
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len);
+uint16_t Step42_GetPulseSpeedLimit(uint16_t microsteps);
 void Step42_ParserInit(Step42_Parser *parser);
 Step42_ParseResult Step42_ParseByte(Step42_Parser *parser,
                                     uint8_t byte,

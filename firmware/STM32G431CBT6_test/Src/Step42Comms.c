@@ -530,6 +530,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
   {
     int16_t speed;
     uint16_t accel;
+    int32_t speed_limit;
 
     if (len != 4U)
     {
@@ -539,7 +540,9 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
 
     speed = Step42Slave_ReadI16(payload);
     accel = Step42Slave_ReadU16(payload + 2U);
-    if ((speed < -5000) || (speed > 5000) || (accel == 0U))
+    speed_limit = (int32_t)Step42Control_GetPulseSpeedLimit();
+    if (((int32_t)speed < -speed_limit) || ((int32_t)speed > speed_limit) ||
+        (accel == 0U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;
@@ -614,7 +617,8 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       limit = Step42Slave_ReadU16(payload + 6U);
       dead_x1000 = Step42Slave_ReadU16(payload + 8U);
     }
-    if ((limit < 1U) || (limit > 5000U) || (dead_x1000 > 10000U))
+    if ((limit < 1U) || (limit > Step42Control_GetPulseSpeedLimit()) ||
+        (dead_x1000 > 10000U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;
@@ -717,7 +721,8 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     steps = Ctrl_ReadI32(payload);
     speed = Step42Slave_ReadU16(payload + 4U);
     accel = Step42Slave_ReadU16(payload + 6U);
-    if ((steps == 0) || (speed == 0U) || (speed > 5000U) || (accel == 0U))
+    if ((steps == 0) || (speed == 0U) ||
+        (speed > Step42Control_GetPulseSpeedLimit()) || (accel == 0U))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;

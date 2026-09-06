@@ -11,7 +11,8 @@
 #define DEFAULT_CLOSED_ACCEL_STEPS (3000.0f)
 #define WEAK_PID_ACCEL_STEPS DEFAULT_CLOSED_ACCEL_STEPS
 #define MOTOR_BASE_STEPS_PER_REV (200.0f)
-#define STEP42_MAX_PULSE_SPEED (5000.0f)
+#define STEP42_BASE_PULSE_SPEED (5000U)
+#define STEP42_HARD_MAX_PULSE_SPEED (30000U)
 #define OPEN_POSITION_MAX_SPEED (2500.0f)
 #define OPEN_POSITION_ACCEL (5000.0f)
 #define STEP42_CFG_MAGIC (0x42323453UL)
@@ -253,6 +254,39 @@ static float ClampF(float value, float minimum, float maximum)
     return maximum;
   }
   return value;
+}
+
+uint16_t Step42Control_GetPulseSpeedLimitForMicrosteps(uint16_t microsteps)
+{
+  uint32_t limit;
+
+  switch (microsteps)
+  {
+  case 1U:
+  case 2U:
+  case 4U:
+  case 8U:
+  case 16U:
+  case 32U:
+  case 64U:
+  case 128U:
+  case 256U:
+    break;
+  default:
+    return STEP42_BASE_PULSE_SPEED;
+  }
+
+  limit = (uint32_t)STEP42_BASE_PULSE_SPEED * (uint32_t)microsteps;
+  if (limit > STEP42_HARD_MAX_PULSE_SPEED)
+  {
+    limit = STEP42_HARD_MAX_PULSE_SPEED;
+  }
+  return (uint16_t)limit;
+}
+
+uint16_t Step42Control_GetPulseSpeedLimit(void)
+{
+  return Step42Control_GetPulseSpeedLimitForMicrosteps(motor_microsteps);
 }
 
 static float Normalize360(float value)
@@ -529,7 +563,8 @@ uint8_t Step42Control_SetProgramStep(uint8_t index, const Step42ProgramStep_t *s
   if (((step->op == STEP42_PROGRAM_OP_POSITION_ABS) ||
        (step->op == STEP42_PROGRAM_OP_POSITION_REL) ||
        (step->op == STEP42_PROGRAM_OP_OPEN_STEPS)) &&
-      ((step->speed == 0U) || (step->speed > 5000U) || (step->accel == 0U)))
+      ((step->speed == 0U) || (step->speed > STEP42_HARD_MAX_PULSE_SPEED) ||
+       (step->accel == 0U)))
   {
     return CTRL_STATUS_RANGE;
   }
@@ -924,6 +959,13 @@ void Step42Control_ProcessProgram(void)
       float limit;
       float deadband;
 
+      if (step->speed > Step42Control_GetPulseSpeedLimit())
+      {
+        program_running = 0U;
+        Step42Control_StopMotion();
+        return;
+      }
+
       (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
       (void)Step42Control_SetClosedAccel((float)step->accel);
       Step42Control_GetPositionPID(&kp, &ki, &kd, &limit, &deadband);
@@ -939,6 +981,13 @@ void Step42Control_ProcessProgram(void)
       float limit;
       float deadband;
 
+      if (step->speed > Step42Control_GetPulseSpeedLimit())
+      {
+        program_running = 0U;
+        Step42Control_StopMotion();
+        return;
+      }
+
       (void)Step42Control_SetMode(CTRL_MODE_CLOSED_POSITION);
       (void)Step42Control_SetClosedAccel((float)step->accel);
       Step42Control_GetPositionPID(&kp, &ki, &kd, &limit, &deadband);
@@ -947,6 +996,12 @@ void Step42Control_ProcessProgram(void)
       break;
     }
     case STEP42_PROGRAM_OP_OPEN_STEPS:
+      if (step->speed > Step42Control_GetPulseSpeedLimit())
+      {
+        program_running = 0U;
+        Step42Control_StopMotion();
+        return;
+      }
       (void)Step42Control_SetMode(CTRL_MODE_OPEN_POSITION);
       (void)Step42Control_MoveStepsByMode(step->value, (float)step->speed, (float)step->accel);
       break;
@@ -958,7 +1013,8 @@ void Step42Control_ProcessProgram(void)
       {
         speed = speed * motor_steps_per_rev / 60.0f;
       }
-      if ((AbsF(speed) > 5000.0f) || (step->accel == 0U))
+      if ((AbsF(speed) > (float)Step42Control_GetPulseSpeedLimit()) ||
+          (step->accel == 0U))
       {
         program_running = 0U;
         Step42Control_StopMotion();
@@ -1393,6 +1449,9 @@ static void Move_ToOpenLoopAngle(float target_angle)
 
 static void OpenLoop_RunSpeed(float speed, float accel)
 {
+  float speed_limit = (float)Step42Control_GetPulseSpeedLimit();
+
+  speed = ClampF(speed, -speed_limit, speed_limit);
   weak_pid_enable = 0U;
   closed_speed_target_steps = 0.0f;
 
@@ -1422,6 +1481,9 @@ static void OpenLoop_RunSpeed(float speed, float accel)
 
 static void ClosedSpeed_Run(float speed, float accel)
 {
+  float speed_limit = (float)Step42Control_GetPulseSpeedLimit();
+
+  speed = ClampF(speed, -speed_limit, speed_limit);
   (void)accel;
 
   if (motor_user_enabled == 0U)
@@ -1454,6 +1516,7 @@ static void ClosedSpeed_Update(void)
 {
   float correction;
   float command_speed;
+  float speed_limit = (float)Step42Control_GetPulseSpeedLimit();
 
   if ((motor_user_enabled == 0U) ||
       (AbsF(closed_speed_target_steps) < 1.0f) ||
@@ -1464,13 +1527,13 @@ static void ClosedSpeed_Update(void)
 
   correction = PID_UpdateLinear(&speed_pid, closed_speed_target_steps, closed_speed_feedback_steps);
   command_speed = closed_speed_target_steps + correction;
-  if (command_speed > 5000.0f)
+  if (command_speed > speed_limit)
   {
-    command_speed = 5000.0f;
+    command_speed = speed_limit;
   }
-  else if (command_speed < -5000.0f)
+  else if (command_speed < -speed_limit)
   {
-    command_speed = -5000.0f;
+    command_speed = -speed_limit;
   }
 
   Stepper_Set_Speed_Profile(&Motor_42, command_speed, WEAK_PID_ACCEL_STEPS);
@@ -1754,7 +1817,8 @@ uint8_t Step42Control_MoveStepsByMode(int32_t steps, float speed, float accel)
 {
   float delta_deg;
 
-  if (steps == 0)
+  if ((steps == 0) || (speed < 1.0f) ||
+      (speed > (float)Step42Control_GetPulseSpeedLimit()) || (accel < 1.0f))
   {
     return 0U;
   }
@@ -1917,9 +1981,11 @@ uint8_t Step42Control_SetMicrosteps(uint16_t microsteps)
 
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband)
 {
-  if (output_limit > STEP42_MAX_PULSE_SPEED)
+  float speed_limit = (float)Step42Control_GetPulseSpeedLimit();
+
+  if (output_limit > speed_limit)
   {
-    output_limit = STEP42_MAX_PULSE_SPEED;
+    output_limit = speed_limit;
   }
   PID_Init(&weak_pid, kp, ki, kd, 0.001f, output_limit, 20.0f, deadband);
 }
@@ -2534,7 +2600,8 @@ uint8_t Step42Control_SetExternalPositionConfig(const Step42ExternalPositionConf
       (config->kp < 0.0f) || (config->kp > 5000.0f) ||
       (config->ki < 0.0f) || (config->ki > 5000.0f) ||
       (config->kd < 0.0f) || (config->kd > 5000.0f) ||
-      (config->output_limit < 1.0f) || (config->output_limit > 10000.0f) ||
+      (config->output_limit < 1.0f) ||
+      (config->output_limit > (float)Step42Control_GetPulseSpeedLimitForMicrosteps(config->microsteps)) ||
       (config->deadband < 0.0f) || (config->deadband > 65.535f) ||
       (config->center_raw_deg < 0.0f) || (config->center_raw_deg >= 360.0f) ||
       (config->center_valid > 1U))

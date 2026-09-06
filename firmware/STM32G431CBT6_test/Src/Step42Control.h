@@ -88,6 +88,8 @@ void Step42Control_RunSpeedByMode(float speed, float accel);
 void Step42Control_StopMotion(void);
 void Step42Control_AbortProgram(void);
 uint8_t Step42Control_SetMicrosteps(uint16_t microsteps);
+uint16_t Step42Control_GetPulseSpeedLimit(void);
+uint16_t Step42Control_GetPulseSpeedLimitForMicrosteps(uint16_t microsteps);
 uint8_t Step42Control_SetClosedAccel(float accel);
 uint8_t Step42Control_SetMotionProfile(uint8_t profile);
 uint8_t Step42Control_SetCurrent(uint8_t hold_current, uint8_t run_current);

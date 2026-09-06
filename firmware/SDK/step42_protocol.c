@@ -54,6 +54,34 @@ static uint16_t Step42_FloatToU16Scaled(float value, float scale)
     return (uint16_t)(scaled + 0.5f);
 }
 
+uint16_t Step42_GetPulseSpeedLimit(uint16_t microsteps)
+{
+    uint32_t limit;
+
+    switch (microsteps)
+    {
+    case 1U:
+    case 2U:
+    case 4U:
+    case 8U:
+    case 16U:
+    case 32U:
+    case 64U:
+    case 128U:
+    case 256U:
+        break;
+    default:
+        return STEP42_BASE_PULSE_SPEED;
+    }
+
+    limit = STEP42_BASE_PULSE_SPEED * (uint32_t)microsteps;
+    if (limit > STEP42_HARD_MAX_PULSE_SPEED)
+    {
+        limit = STEP42_HARD_MAX_PULSE_SPEED;
+    }
+    return (uint16_t)limit;
+}
+
 uint8_t Step42_Crc8(const uint8_t *data, uint8_t len)
 {
     uint8_t crc = 0x00U;
@@ -288,7 +316,9 @@ uint16_t Step42_BuildSetSpeed(uint8_t *buf,
 {
     uint8_t payload[4];
 
-    if ((speed < -5000) || (speed > 5000) || (accel == 0U))
+    if ((speed < -(int16_t)STEP42_HARD_MAX_PULSE_SPEED) ||
+        (speed > (int16_t)STEP42_HARD_MAX_PULSE_SPEED) ||
+        (accel == 0U))
     {
         return 0U;
     }
@@ -307,7 +337,8 @@ uint16_t Step42_BuildMoveSteps(uint8_t *buf,
 {
     uint8_t payload[8];
 
-    if ((steps == 0) || (speed == 0U) || (speed > 5000U) || (accel == 0U))
+    if ((steps == 0) || (speed == 0U) ||
+        (speed > STEP42_HARD_MAX_PULSE_SPEED) || (accel == 0U))
     {
         return 0U;
     }

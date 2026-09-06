@@ -2,6 +2,7 @@
 
 #define STEPPER_SCURVE_RAMP_TIME_S (0.030f)
 #define STEPPER_MIN_SPEED          (1.0f)
+#define STEPPER_MIN_DELAY_TICKS    (32U)
 
 static float Stepper_AbsF(float value)
 {
@@ -17,9 +18,9 @@ static uint32_t Stepper_SpeedToDelay(const Stepper_t *stepper, float speed)
 {
 	uint32_t delay = (uint32_t)(stepper->timer_freq / Stepper_AbsF(speed));
 
-	if (delay < 100U)
+	if (delay < STEPPER_MIN_DELAY_TICKS)
 	{
-		delay = 100U;
+		delay = STEPPER_MIN_DELAY_TICKS;
 	}
 	else if (delay > 600000U)
 	{
@@ -264,8 +265,8 @@ void Stepper_Run_Speed(Stepper_t *stepper)
 	uint32_t initial_delay = (uint32_t)(0.676f * sqrtf(2.0f / stepper->accel) * stepper->timer_freq);
 	if (initial_delay > 600000)
 		initial_delay = 600000;
-	else if (initial_delay < 100)
-		initial_delay = 100;
+	else if (initial_delay < STEPPER_MIN_DELAY_TICKS)
+		initial_delay = STEPPER_MIN_DELAY_TICKS;
 
 	stepper->step_delay = initial_delay;
 	stepper->current_speed = (stepper->target_speed >= 0.0f) ?

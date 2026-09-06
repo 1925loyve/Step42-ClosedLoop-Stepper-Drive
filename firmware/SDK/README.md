@@ -136,6 +136,18 @@ len = Step42_BuildSetSpeed(tx, sizeof(tx), ++seq, 1000, 3000);
 uart_send(tx, len);
 ```
 
+The pulse-rate ceiling follows the selected microstep value:
+
+```text
+limit = min(5000 * microsteps, 30000) pulse/s
+1 / 2 / 4 / 8+ microsteps -> 5000 / 10000 / 20000 / 30000 pulse/s
+```
+
+Call `Step42_GetPulseSpeedLimit(microsteps)` before building a speed or step
+command when the application accepts user-entered values. Frame builders only
+enforce the 30000 pulse/s hard ceiling; the drive enforces the current
+microstep-specific limit and returns a range error when it is exceeded.
+
 ## Tracking PID
 
 The tracking controller accepts either one error loop or a cascade controller.
