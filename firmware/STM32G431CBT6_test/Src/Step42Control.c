@@ -1073,6 +1073,9 @@ void Step42Control_ProcessProgram(void)
         return;
       }
       break;
+    case STEP42_PROGRAM_OP_DELAY:
+      /* Completion is handled below after duration_ms has elapsed. */
+      break;
     case STEP42_PROGRAM_OP_GOTO:
       Program_Jump((uint8_t)step->value);
       return;
