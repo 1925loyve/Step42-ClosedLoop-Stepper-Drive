@@ -1080,9 +1080,15 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
-    if (Step42Control_SetCurrent(payload[0], payload[1]) == 0U)
+    if ((payload[0] > 31U) || (payload[1] == 0U) ||
+        (payload[1] > 31U) || (payload[0] > payload[1]))
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
+      return;
+    }
+    if (Step42Control_SetCurrent(payload[0], payload[1]) == 0U)
+    {
+      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_DEVICE_ERROR);
       return;
     }
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);

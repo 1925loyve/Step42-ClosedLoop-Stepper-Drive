@@ -290,10 +290,20 @@ uint8_t Tmc2209_GetChopperMode(void)
 uint8_t Tmc2209_SetCurrent(uint8_t hold_current, uint8_t run_current)
 {
     uint32_t value;
-    uint32_t read_val = 0U;
+    uint32_t ifcnt_before = 0U;
+    uint32_t ifcnt_after = 0U;
 
     if ((hold_current > 31U) || (run_current == 0U) ||
         (run_current > 31U) || (hold_current > run_current))
+    {
+        return 0U;
+    }
+
+    /* IHOLD_IRUN is write-only. Verify the write through IFCNT instead of
+       reading register 0x10 back and treating the result as its value. */
+    if (TMC2209_ReadReg_Robust(tmc2209_active_addr,
+                               TMC2209_IFCNT,
+                               &ifcnt_before) == 0U)
     {
         return 0U;
     }
@@ -302,13 +312,12 @@ uint8_t Tmc2209_SetCurrent(uint8_t hold_current, uint8_t run_current)
     TMC2209_WriteReg(tmc2209_active_addr, TMC2209_IHOLD_IRUN, value);
     delay_ms(2);
     if (TMC2209_ReadReg_Robust(tmc2209_active_addr,
-                               TMC2209_IHOLD_IRUN,
-                               &read_val) == 0U)
+                               TMC2209_IFCNT,
+                               &ifcnt_after) == 0U)
     {
         return 0U;
     }
-    if (((read_val & 0x1FU) != hold_current) ||
-        (((read_val >> 8) & 0x1FU) != run_current))
+    if (((uint8_t)ifcnt_after) != (uint8_t)((uint8_t)ifcnt_before + 1U))
     {
         return 0U;
     }
