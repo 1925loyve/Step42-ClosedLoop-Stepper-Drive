@@ -163,8 +163,8 @@ int Step42_STM32HAL_SetSignals(Step42_STM32HAL_Handle *handle,
                                uint8_t target_detected,
                                uint8_t custom1,
                                uint8_t custom2,
-                               float primary_error,
-                               float secondary_feedback)
+                               int16_t primary_error,
+                               int16_t secondary_feedback)
 {
     uint8_t tx[STEP42_MAX_FRAME_SIZE];
     uint16_t len;

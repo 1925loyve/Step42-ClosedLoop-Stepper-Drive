@@ -165,14 +165,7 @@ uart_send(tx, len);
 len = Step42_BuildTrackPid(tx, sizeof(tx), ++seq, 0, 180.0f, 0.2f, 0.0f);
 uart_send(tx, len);
 
-len = Step42_BuildTrackInput(tx, sizeof(tx), ++seq, vision_error, gyro_feedback);
-uart_send(tx, len);
-```
-
-When an offline program needs search/track branching, send the recognition
-state together with two optional boolean signals and both error channels:
-
-```c
+/* Send this once per sensor/camera sample. Values are raw signed integers. */
 len = Step42_BuildSignalInput(tx, sizeof(tx), ++seq,
                               target_detected, custom_signal_1,
                               custom_signal_2, vision_error, gyro_feedback);
@@ -183,9 +176,14 @@ Step42_STM32HAL_SetSignals(&motor, target_detected, custom_signal_1,
                            custom_signal_2, vision_error, gyro_feedback);
 ```
 
-The three booleans can drive the offline program's conditional branches. When
-the motor is in tracking PID mode, the two numeric fields also update the PID
-input. UART and CAN carry the same binary command payload.
+The fixed request is 11 bytes: `A5 5A 05 27 SEQ FLAGS ERROR1_L ERROR1_H
+ERROR2_L ERROR2_H CRC8`. The errors are little-endian signed 16-bit integers;
+they are not floating-point values and are not multiplied by 100. `FLAGS`
+bits 0, 1 and 2 are `target_detected`, `custom1` and `custom2`. Send a frame
+for every sensor/camera sample, including `target_detected=0` with both errors
+set to zero when the target is absent. The flags can drive offline-program
+branches. In tracking PID mode the numeric fields also update the PID input.
+UART and CAN carry the same binary command payload.
 
 The UART data stream is disabled after reset. Send `Step42_BuildSetStream()`
 only when continuous status telemetry is needed.
@@ -212,8 +210,11 @@ uart_send(tx, len);
 Step42_STM32HAL_SetCurrent(&motor, 4, 12);
 ```
 
-Protocol version 18 appends the signal-input command and expands offline
-programs to 32 steps with drive-state, conditional-branch, and goto actions.
+Protocol version 19 makes signal input `0x27` the only PID/vision input and
+uses two raw signed 16-bit errors. Legacy command `0x13` and newline-delimited
+ASCII input are removed. Protocol version 18 appended the original signal
+input and expanded offline programs to 32 steps with drive-state,
+conditional-branch, and goto actions.
 Protocol version 17 appended `hold_current` and `run_current` to Query response
 payload bytes 69 and 70. Older Query replies remain decodable and use the
 default values `4 / 12` when those bytes are absent.

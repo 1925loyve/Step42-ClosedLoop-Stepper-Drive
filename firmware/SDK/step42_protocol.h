@@ -34,7 +34,6 @@ extern "C" {
 #define STEP42_CMD_TRACK_CONFIG     (0x10U)
 #define STEP42_CMD_TRACK_PID        (0x11U)
 #define STEP42_CMD_TRACK_ADVANCED   (0x12U)
-#define STEP42_CMD_TRACK_INPUT      (0x13U)
 #define STEP42_CMD_TRACK_DEFAULT    (0x14U)
 #define STEP42_CMD_TRACK_QUERY      (0x15U)
 #define STEP42_CMD_CHOPPER_MODE     (0x16U)
@@ -245,12 +244,10 @@ uint16_t Step42_BuildTrackAdvanced(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                   uint16_t prediction_ms, uint16_t timeout_ms,
                                   float single_deadband, float outer_deadband,
                                   float inner_deadband);
-uint16_t Step42_BuildTrackInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
-                               float primary_error, float secondary_feedback);
 uint16_t Step42_BuildSignalInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                 uint8_t target_detected, uint8_t custom1,
-                                uint8_t custom2, float primary_error,
-                                float secondary_feedback);
+                                uint8_t custom2, int16_t primary_error,
+                                int16_t secondary_feedback);
 uint16_t Step42_BuildTrackDefaults(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildSetChopperMode(uint8_t *buf, uint16_t max_len,

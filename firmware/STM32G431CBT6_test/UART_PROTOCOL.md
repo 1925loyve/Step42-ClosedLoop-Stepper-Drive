@@ -4,30 +4,60 @@ Error UART (USART2) and Debug UART (USART3): 115200, 8 data bits, no parity,
 1 stop bit. The upper computer identifies which one it is connected to from
 the first Query response.
 
+## Wiring
+
+- UART uses 3.3 V TTL levels: host `TX -> drive RX`, host `RX -> drive TX`,
+  and host `GND -> drive GND`. Do not connect RS-232 levels or 5 V logic.
+- DIP inputs are pulled high; a switch connected to ground reads as `0`.
+  `MS1 MS2`: `00=Factory Debug`, `01=PWM`, `10=CAN`, `11=UART`.
+- The bipolar motor connector is `A+ / A- / B+ / B-`. With power removed,
+  use resistance measurement to identify the two coil pairs. Never hot-plug
+  the motor connector.
+- The MT6701 requires a radially magnetized magnet centered over the sensor.
+- Connect motor power with the polarity and voltage range marked on the board.
+
 The firmware command interface uses this binary protocol only. The PC tuning
 tool and MCU/Linux SDK use the same frame format.
 
-## Visual Error Fast Path
+## Unified Signal And Error Input
 
-When the DIP switch is `11` (UART mode) and the drive is in built-in error PID
-mode, Error UART / USART2 also accepts a newline-delimited ASCII error value.
-This is intended for a vision module, not for the PC tuning tool:
+The old newline-delimited text input is not supported. Vision modules, MCUs
+and Linux hosts must send command `0x27` as a fixed 11-byte binary frame:
 
 ```text
--123\n
+A5 5A 05 27 SEQ FLAGS ERROR1_L ERROR1_H ERROR2_L ERROR2_H CRC8
 ```
 
-- Accepted format: signed integer, for example `0\n`, `42\r\n`, or `-18\n`.
-- Range: `-10000` to `+10000`.
-- No CRC and no acknowledgement are used; the newline is the frame boundary.
-- Each valid line directly refreshes the tracking PID input. A 60 fps vision
-  source is therefore sufficient; firmware PID continues at its configured
-  frequency between frames and stops on input timeout.
-- It remains available while an internal `运行内置PID` instruction is running:
-  the instruction owns the motion mode, while Error UART supplies live error.
-- `0x1F Tracking direction`: request `u8 reverse` (`0=normal`, `1=reverse`),
-  response `status`. This is normally sent through Debug UART by the upper
-  computer's `误差反向` checkbox.
+- `SEQ`: increment for every frame and wrap from 255 to 0.
+- `FLAGS bit0`: `target_detected`.
+- `FLAGS bit1`: user-defined signal `custom1`.
+- `FLAGS bit2`: user-defined signal `custom2`.
+- `FLAGS bit3..7`: reserved and must be zero.
+- `ERROR1`, `ERROR2`: raw little-endian signed `int16_t`; no decimal scaling.
+- Single-loop PID uses `ERROR1` and sets `ERROR2=0`.
+- Cascade PID normally uses `ERROR1` as the outer vision/position error and
+  `ERROR2` as the inner speed or angular-rate feedback.
+- Send one frame for every camera/sensor sample. If no target is detected,
+  send `target_detected=0` and normally set both errors to zero.
+- The same command remains accepted while an internal tracking instruction is
+  running, so program branches can react to `target/custom1/custom2` while the
+  numeric fields refresh the PID input.
+
+Example for `SEQ=1`, `target=1`, `custom1=0`, `custom2=1`, `ERROR1=120`,
+`ERROR2=-35`:
+
+```text
+A5 5A 05 27 01 05 78 00 DD FF 0B
+```
+
+Successful UART response:
+
+```text
+5A A5 01 A7 01 00 5D
+```
+
+`0x1F Tracking direction` uses request `u8 reverse` (`0=normal`, `1=reverse`).
+The upper computer normally sends it through Debug UART.
 
 ## Frame
 
@@ -71,7 +101,7 @@ Status byte:
 | `0x07` | Query | none | complete current configuration and status, including response interface |
 | `0x08` | Mode | `u8 mode` | `status` |
 | `0x09` | Stop | none | `status` |
-| `0x13` | Tracking error input | `i32 primary_centi, i32 secondary_centi`, each `-100000~100000` | `status` |
+| `0x27` | Signals and PID input | `u8 flags, i16 error1, i16 error2` | `status` |
 | `0x17` | Relative closed-loop angle | `i32 delta_cdeg`, range `-720000~720000`; resulting target must remain within `-7200°~7200°` | `status` |
 | `0x18` | Program mode | `u8 enable` | `status`; accepted by Error and Debug UART |
 | `0x19` | Program step | `u8 index, u8 op, u8 flags, u16 speed, u16 accel, u16 duration_ms, i32 value` | `status`; accepted by Error and Debug UART |
@@ -102,7 +132,9 @@ parameter writes and drive settings return `DENIED`. Tracking error input is
 the sole exception: it is treated as live sensor data and is accepted only
 while the current internal instruction has entered tracking PID mode.
 Only telemetry/query, enable, stop and program-management commands remain
-available. The program executor itself may run position, open-step,
+available. Signal/error input `0x27` is the sensor-data exception and remains
+accepted while a program-owned tracking step is active. The program executor
+itself may run position, open-step,
 speed, delay, home, tracking PID, microstep setup, chopper setup and stop steps
 without blocking the control loop. Program step `op` values are: `1` absolute
 position, `2` relative position, `3` open-loop steps, `4` speed, `5` delay,
@@ -156,9 +188,8 @@ the acknowledgement is sent with the **new** response ID. The PC upper
 computer changes it through Debug UART and reads it back in Query status.
 
 CAN supports every binary control command, including position, speed, home,
-program and tracking PID commands. It does not accept the Error UART's
-newline-delimited ASCII visual-error fast path; send `0x13 Tracking error
-input` instead. In CAN mode, USART3 Debug remains available to the existing
+program and tracking PID commands. Send the same `0x27` signal/error frame
+through the CAN segmentation transport. In CAN mode, USART3 Debug remains available to the existing
 upper-computer program for Query, telemetry stream, and tracking-PID tuning.
 It uses the existing restricted debug permissions and cannot issue external
 position, speed, step or home motion commands; CAN remains the sole full
@@ -169,6 +200,9 @@ responses, sequence numbers, or CRC.
 
 Protocol v15 adds the Flash-persistent CAN Node ID and appends it as Query
 response byte `68`.
+
+Protocol v19 replaces all legacy visual-error inputs with the fixed `0x27`
+five-byte payload. The ASCII newline input and command `0x13` are removed.
 
 Protocol v9 extends home mode: `0=nearest single-turn zero`, `1=positive
 single-turn zero`, `2=negative single-turn zero`, `3=multi-turn absolute zero`.

@@ -10,8 +10,6 @@
 #define STATUS_STREAM_INTERVAL_MS (50UL)
 #define CTRL_RX_BUFFER_SIZE (256U)
 #define CTRL_RX_BUFFER_MASK (CTRL_RX_BUFFER_SIZE - 1U)
-#define VISION_ERROR_LINE_MAX (20U)
-#define VISION_ERROR_ABS_LIMIT (10000.0f)
 #define CTRL_INTERFACE_ERROR_UART (0U)
 #define CTRL_INTERFACE_DEBUG_UART (1U)
 #define CTRL_INTERFACE_CAN (2U)
@@ -56,8 +54,6 @@ static volatile uint32_t debug_tx_pause_until_ms = 0U;
 static volatile uint32_t debug_raw_last_tx_ms = 0U;
 static volatile uint32_t debug_rx_count = 0U;
 static uint8_t debug_stream_enable = 0U;
-static char vision_error_line[VISION_ERROR_LINE_MAX];
-static uint8_t vision_error_line_len = 0U;
 static uint8_t can_started = 0U;
 static Step42CanPacket_t can_rx_queue[CAN_RX_QUEUE_SIZE];
 static volatile uint8_t can_rx_head = 0U;
@@ -421,9 +417,8 @@ static uint8_t Ctrl_IsProgramModeAllowed(uint8_t cmd)
   case CTRL_CMD_STREAM:
   case CTRL_CMD_QUERY:
   case CTRL_CMD_STOP:
-  /* Tracking input is sensor data, not an external motion command. It must
+  /* Signal input is sensor data, not an external motion command. It must
      remain available while a program-owned tracking step is running. */
-  case CTRL_CMD_TRACK_INPUT:
   case CTRL_CMD_SIGNAL_INPUT:
   /* Same rule for the continuous-position target supplied by a vision host. */
   case CTRL_CMD_EXTERNAL_POSITION_TARGET:
@@ -904,41 +899,6 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
     return;
   }
 
-  if (cmd == CTRL_CMD_TRACK_INPUT)
-  {
-    if ((len != 4U) && (len != 8U))
-    {
-      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
-      return;
-    }
-    if (Step42Control_GetMode() != CTRL_MODE_TRACK_PID)
-    {
-      Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_MODE);
-      return;
-    }
-    if (len == 8U)
-    {
-      int32_t primary = Ctrl_ReadI32(payload);
-      int32_t secondary = Ctrl_ReadI32(payload + 4U);
-      if ((primary < -100000) || (primary > 100000) ||
-          (secondary < -100000) || (secondary > 100000))
-      {
-        Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
-        return;
-      }
-      Step42Control_SetTrackingInput(((float)primary) / 100.0f,
-                                     ((float)secondary) / 100.0f);
-    }
-    else
-    {
-      Step42Control_SetTrackingInput(((float)Step42Slave_ReadI16(payload)) / 100.0f,
-                                     ((float)Step42Slave_ReadI16(payload + 2U)) / 100.0f);
-    }
-    Step42Control_MarkExternalTask();
-    Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
-    return;
-  }
-
   if (cmd == CTRL_CMD_TRACK_DEFAULT)
   {
     if (len != 0U)
@@ -1182,20 +1142,18 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
   if (cmd == CTRL_CMD_SIGNAL_INPUT)
   {
     uint8_t signals;
-    int32_t primary;
-    int32_t secondary;
+    int16_t primary;
+    int16_t secondary;
 
-    if (len != 9U)
+    if (len != 5U)
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_BAD_LEN);
       return;
     }
     signals = payload[0];
-    primary = Ctrl_ReadI32(payload + 1U);
-    secondary = Ctrl_ReadI32(payload + 5U);
-    if (((signals & (uint8_t)~0x07U) != 0U) ||
-        (primary < -100000) || (primary > 100000) ||
-        (secondary < -100000) || (secondary > 100000))
+    primary = Step42Slave_ReadI16(payload + 1U);
+    secondary = Step42Slave_ReadI16(payload + 3U);
+    if ((signals & (uint8_t)~0x07U) != 0U)
     {
       Ctrl_SendStatus(cmd, seq, CTRL_STATUS_RANGE);
       return;
@@ -1205,8 +1163,7 @@ static void Ctrl_ProcessFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload, 
                                     signals & 0x04U);
     if (Step42Control_GetMode() == CTRL_MODE_TRACK_PID)
     {
-      Step42Control_SetTrackingInput(((float)primary) / 100.0f,
-                                     ((float)secondary) / 100.0f);
+      Step42Control_SetTrackingInput((float)primary, (float)secondary);
       Step42Control_MarkExternalTask();
     }
     Ctrl_SendStatus(cmd, seq, CTRL_STATUS_OK);
@@ -1281,7 +1238,6 @@ static uint8_t Ctrl_DebugCommandAllowed(uint8_t cmd)
   case CTRL_CMD_TRACK_CONFIG:
   case CTRL_CMD_TRACK_PID:
   case CTRL_CMD_TRACK_ADVANCED:
-  case CTRL_CMD_TRACK_INPUT:
   case CTRL_CMD_SIGNAL_INPUT:
   case CTRL_CMD_TRACK_DEFAULT:
   case CTRL_CMD_TRACK_QUERY:
@@ -1332,98 +1288,12 @@ static uint8_t Ctrl_CanDebugCommandAllowed(uint8_t cmd)
   }
 }
 
-static uint8_t Ctrl_ParseVisionError(const char *text, uint8_t len, float *error)
-{
-  uint8_t index = 0U;
-  uint8_t digit_seen = 0U;
-  float value = 0.0f;
-  float sign = 1.0f;
-
-  if ((text == 0) || (error == 0) || (len == 0U))
-  {
-    return 0U;
-  }
-  if ((text[index] == '+') || (text[index] == '-'))
-  {
-    sign = (text[index] == '-') ? -1.0f : 1.0f;
-    index++;
-  }
-  for (; index < len; index++)
-  {
-    char ch = text[index];
-
-    if ((ch >= '0') && (ch <= '9'))
-    {
-      digit_seen = 1U;
-      value = value * 10.0f + (float)(ch - '0');
-    }
-    else
-    {
-      return 0U;
-    }
-  }
-  value *= sign;
-  if ((digit_seen == 0U) || (value > VISION_ERROR_ABS_LIMIT) ||
-      (value < -VISION_ERROR_ABS_LIMIT))
-  {
-    return 0U;
-  }
-  *error = value;
-  return 1U;
-}
-
-static void Ctrl_ProcessVisionErrorByte(uint8_t value)
-{
-  float error;
-
-  if (value == '\r')
-  {
-    return;
-  }
-  if (value == '\n')
-  {
-    if ((Step42Control_GetMode() == CTRL_MODE_TRACK_PID) &&
-        (Ctrl_ParseVisionError(vision_error_line, vision_error_line_len, &error) != 0U))
-    {
-      Step42Control_SetTrackingInput(error, 0.0f);
-      Step42Control_MarkExternalTask();
-    }
-    vision_error_line_len = 0U;
-    return;
-  }
-  if (((value >= '0') && (value <= '9')) || (value == '+') ||
-      (value == '-'))
-  {
-    if (vision_error_line_len < (VISION_ERROR_LINE_MAX - 1U))
-    {
-      vision_error_line[vision_error_line_len++] = (char)value;
-    }
-    else
-    {
-      vision_error_line_len = 0U;
-    }
-  }
-  else
-  {
-    vision_error_line_len = 0U;
-  }
-}
-
 static void Ctrl_ProcessRxByte(Step42Slave_Parser_t *parser,
                                uint8_t ch,
                                UART_HandleTypeDef *huart,
                                uint8_t restricted)
 {
   Step42Slave_Frame_t frame;
-
-  /* USART2 accepts newline-delimited visual error only while idle. Binary
-     control frames keep their original A5 5A parser and are never mixed. */
-  if ((huart == &huart2) &&
-      (Step42BoardMode_Get() == STEP42_BOARD_UART) &&
-      (parser->state == 0U) && (ch != CTRL_SOF1))
-  {
-    Ctrl_ProcessVisionErrorByte(ch);
-  }
 
   if (Step42Slave_ProcessByte(parser, ch, &frame) != 0U)
   {
@@ -1679,7 +1549,6 @@ void Step42Comms_Init(void)
   Step42Slave_ParserInit(&debug_parser);
   Step42Slave_ParserInit(&can_parser);
   debug_stream_enable = 0U;
-  vision_error_line_len = 0U;
   response_interface = CTRL_INTERFACE_ERROR_UART;
   stream_uart = &huart3;
   stream_interface = CTRL_INTERFACE_DEBUG_UART;
@@ -1696,7 +1565,6 @@ void Step42Comms_OnBoardModeChanged(void)
   Step42Slave_ParserInit(&debug_parser);
   Step42Slave_ParserInit(&can_parser);
   debug_stream_enable = 0U;
-  vision_error_line_len = 0U;
   response_interface = CTRL_INTERFACE_ERROR_UART;
   stream_uart = &huart3;
   stream_interface = CTRL_INTERFACE_DEBUG_UART;

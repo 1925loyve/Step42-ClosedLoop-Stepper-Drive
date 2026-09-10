@@ -527,43 +527,21 @@ uint16_t Step42_BuildTrackPid(uint8_t *buf, uint16_t max_len, uint8_t seq,
                              payload, sizeof(payload));
 }
 
-uint16_t Step42_BuildTrackInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
-                               float primary_error, float secondary_feedback)
-{
-    uint8_t payload[8];
-    float primary_scaled = primary_error * 100.0f;
-    float secondary_scaled = secondary_feedback * 100.0f;
-
-    if ((primary_scaled < -100000.0f) || (primary_scaled > 100000.0f) ||
-        (secondary_scaled < -100000.0f) || (secondary_scaled > 100000.0f))
-    {
-        return 0U;
-    }
-    Step42_WriteI32(payload, 0U, (int32_t)primary_scaled);
-    Step42_WriteI32(payload, 4U, (int32_t)secondary_scaled);
-    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_INPUT, seq,
-                             payload, sizeof(payload));
-}
-
 uint16_t Step42_BuildSignalInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                 uint8_t target_detected, uint8_t custom1,
-                                uint8_t custom2, float primary_error,
-                                float secondary_feedback)
+                                uint8_t custom2, int16_t primary_error,
+                                int16_t secondary_feedback)
 {
-    uint8_t payload[9];
-    float primary_scaled = primary_error * 100.0f;
-    float secondary_scaled = secondary_feedback * 100.0f;
+    uint8_t payload[5];
 
-    if ((target_detected > 1U) || (custom1 > 1U) || (custom2 > 1U) ||
-        (primary_scaled < -100000.0f) || (primary_scaled > 100000.0f) ||
-        (secondary_scaled < -100000.0f) || (secondary_scaled > 100000.0f))
+    if ((target_detected > 1U) || (custom1 > 1U) || (custom2 > 1U))
     {
         return 0U;
     }
     payload[0] = target_detected | (uint8_t)(custom1 << 1) |
                  (uint8_t)(custom2 << 2);
-    Step42_WriteI32(payload, 1U, (int32_t)primary_scaled);
-    Step42_WriteI32(payload, 5U, (int32_t)secondary_scaled);
+    Step42_WriteI16(payload, 1U, primary_error);
+    Step42_WriteI16(payload, 3U, secondary_feedback);
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_SIGNAL_INPUT, seq,
                              payload, sizeof(payload));
 }
