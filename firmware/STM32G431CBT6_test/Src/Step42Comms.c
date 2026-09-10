@@ -336,7 +336,7 @@ static void Step42Comms_SendTelemetry(void)
 
 static void Step42Comms_SendTrackingQuery(uint8_t seq)
 {
-  uint8_t resp[60];
+  uint8_t resp[61];
   const Step42TrackingConfig_t *cfg = Step42Control_GetTrackingConfig();
 
   resp[0] = CTRL_STATUS_OK;
@@ -363,6 +363,7 @@ static void Step42Comms_SendTrackingQuery(uint8_t seq)
   Step42Slave_WriteU16(resp, 55U, (uint16_t)(cfg->outer.deadband * 1000.0f));
   Step42Slave_WriteU16(resp, 57U, (uint16_t)(cfg->inner.deadband * 1000.0f));
   resp[59] = Step42Control_GetTrackingDirection();
+  resp[60] = Step42Control_IsTrackingConfigPersisted();
   Ctrl_SendFrame(CTRL_CMD_TRACK_QUERY, seq, resp, sizeof(resp));
 }
 

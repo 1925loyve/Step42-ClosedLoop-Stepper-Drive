@@ -137,6 +137,7 @@ void Step42Control_SetProgramSignals(uint8_t target_detected,
                                      uint8_t custom2);
 void Step42Control_SetTrackingDirection(uint8_t reverse);
 uint8_t Step42Control_GetTrackingDirection(void);
+uint8_t Step42Control_IsTrackingConfigPersisted(void);
 void Step42Control_ResetTrackingDefaults(void);
 uint8_t Step42Control_SetExternalPositionConfig(const Step42ExternalPositionConfig_t *config);
 const Step42ExternalPositionConfig_t *Step42Control_GetExternalPositionConfig(void);

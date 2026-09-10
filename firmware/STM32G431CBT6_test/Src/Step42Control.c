@@ -2602,6 +2602,21 @@ uint8_t Step42Control_GetTrackingDirection(void)
   return tracking_error_reverse;
 }
 
+uint8_t Step42Control_IsTrackingConfigPersisted(void)
+{
+  const Step42TrackingConfig_t *runtime = Step42Tracking_GetConfig();
+
+  if (loaded_flash_config_valid == 0U)
+  {
+    return 0U;
+  }
+
+  return (memcmp(&loaded_flash_config.tracking, runtime,
+                 sizeof(Step42TrackingConfig_t)) == 0) &&
+         (loaded_flash_config.tracking_reverse ==
+          (uint32_t)tracking_error_reverse) ? 1U : 0U;
+}
+
 void Step42Control_ResetTrackingDefaults(void)
 {
   Step42Tracking_ResetDefaults();
