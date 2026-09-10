@@ -321,8 +321,11 @@ uint8_t Tmc2209_SetCurrent(uint8_t hold_current, uint8_t run_current)
                                    TMC2209_IFCNT,
                                    &ifcnt_after) != 0U)
         {
-            if (((uint8_t)ifcnt_after) ==
-                (uint8_t)((uint8_t)ifcnt_before + 1U))
+            /* IFCNT is an 8-bit write counter.  It normally increases by
+               one, but only a change is required for acknowledgement: an
+               intervening valid write or counter wrap must not turn a
+               successful current update into a false error. */
+            if ((uint8_t)ifcnt_after != (uint8_t)ifcnt_before)
             {
                 tmc2209_hold_current = hold_current;
                 tmc2209_run_current = run_current;
