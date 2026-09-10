@@ -293,7 +293,6 @@ uint8_t Tmc2209_SetCurrent(uint8_t hold_current, uint8_t run_current)
     uint32_t ifcnt_before = 0U;
     uint32_t ifcnt_after = 0U;
     uint8_t attempt;
-    uint8_t read_retry;
 
     if ((hold_current > 31U) || (run_current == 0U) ||
         (run_current > 31U) || (hold_current > run_current))
@@ -302,46 +301,35 @@ uint8_t Tmc2209_SetCurrent(uint8_t hold_current, uint8_t run_current)
     }
 
     /* IHOLD_IRUN is write-only. IFCNT is the supported acknowledgement path.
-       A current change can add switching noise, so retry the complete
-       read/write/read transaction instead of reporting a transient read miss. */
+       Retry the bounded transaction without extending the command beyond the
+       host acknowledgement timeout. */
     value = (6UL << 16) | ((uint32_t)run_current << 8) | hold_current;
     for (attempt = 0U; attempt < 3U; attempt++)
     {
-        for (read_retry = 0U; read_retry < 3U; read_retry++)
+        if (TMC2209_ReadReg_Robust(tmc2209_active_addr,
+                                   TMC2209_IFCNT,
+                                   &ifcnt_before) == 0U)
         {
-            if (TMC2209_ReadReg_Robust(tmc2209_active_addr,
-                                       TMC2209_IFCNT,
-                                       &ifcnt_before) != 0U)
-            {
-                break;
-            }
             delay_ms(2);
-        }
-        if (read_retry >= 3U)
-        {
             continue;
         }
 
         TMC2209_WriteReg(tmc2209_active_addr, TMC2209_IHOLD_IRUN, value);
         delay_ms(3);
 
-        for (read_retry = 0U; read_retry < 3U; read_retry++)
+        if (TMC2209_ReadReg_Robust(tmc2209_active_addr,
+                                   TMC2209_IFCNT,
+                                   &ifcnt_after) != 0U)
         {
-            if (TMC2209_ReadReg_Robust(tmc2209_active_addr,
-                                       TMC2209_IFCNT,
-                                       &ifcnt_after) != 0U)
+            if (((uint8_t)ifcnt_after) ==
+                (uint8_t)((uint8_t)ifcnt_before + 1U))
             {
-                if (((uint8_t)ifcnt_after) ==
-                    (uint8_t)((uint8_t)ifcnt_before + 1U))
-                {
-                    tmc2209_hold_current = hold_current;
-                    tmc2209_run_current = run_current;
-                    return 1U;
-                }
-                break;
+                tmc2209_hold_current = hold_current;
+                tmc2209_run_current = run_current;
+                return 1U;
             }
-            delay_ms(2);
         }
+        delay_ms(2);
     }
 
     return 0U;

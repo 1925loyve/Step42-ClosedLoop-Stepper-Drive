@@ -2489,7 +2489,24 @@ uint8_t Step42Control_GetMotionProfile(void)
 
 uint8_t Step42Control_SetCurrent(uint8_t hold_current, uint8_t run_current)
 {
-  return Tmc2209_SetCurrent(hold_current, run_current);
+  uint8_t restore_output = ((motor_user_enabled != 0U) &&
+                            (thermal_lockout == 0U) &&
+                            (stall_fault == 0U)) ? 1U : 0U;
+  uint8_t status;
+
+  if (restore_output != 0U)
+  {
+    Motor_DisableOutput();
+    HAL_Delay(3U);
+  }
+
+  status = Tmc2209_SetCurrent(hold_current, run_current);
+
+  if (restore_output != 0U)
+  {
+    Motor_EnableOutput();
+  }
+  return status;
 }
 
 uint8_t Step42Control_GetHoldCurrent(void)
