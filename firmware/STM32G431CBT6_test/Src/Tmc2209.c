@@ -314,6 +314,11 @@ uint8_t Tmc2209_SetCurrent(uint8_t hold_current, uint8_t run_current)
             continue;
         }
 
+        /* Repeat the write once.  IHOLD_IRUN has no response frame; the
+           second write makes the transaction tolerant of one missed UART
+           datagram while IFCNT still provides the final acknowledgement. */
+        TMC2209_WriteReg(tmc2209_active_addr, TMC2209_IHOLD_IRUN, value);
+        delay_ms(2);
         TMC2209_WriteReg(tmc2209_active_addr, TMC2209_IHOLD_IRUN, value);
         delay_ms(3);
 
