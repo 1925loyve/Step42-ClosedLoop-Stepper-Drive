@@ -470,7 +470,8 @@ uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_
     if ((mode != STEP42_MODE_OPEN_SPEED) &&
         (mode != STEP42_MODE_OPEN_POSITION) &&
         (mode != STEP42_MODE_CLOSED_POSITION) &&
-        (mode != STEP42_MODE_TRACK_PID))
+        (mode != STEP42_MODE_TRACK_PID) &&
+        (mode != STEP42_MODE_EXTERNAL_POSITION))
     {
         return 0U;
     }
@@ -487,6 +488,18 @@ uint16_t Step42_BuildStop(uint8_t *buf, uint16_t max_len, uint8_t seq)
 uint16_t Step42_BuildSaveRuntimeConfig(uint8_t *buf, uint16_t max_len, uint8_t seq)
 {
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_SAVE_RUNTIME_CONFIG, seq, 0, 0U);
+}
+
+uint16_t Step42_BuildSaveRuntimeConfigScope(uint8_t *buf, uint16_t max_len,
+                                            uint8_t seq, uint8_t scope)
+{
+    if ((scope < STEP42_CONFIG_SAVE_GLOBAL) ||
+        (scope > STEP42_CONFIG_SAVE_EXTERNAL))
+    {
+        return 0U;
+    }
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_SAVE_RUNTIME_CONFIG,
+                             seq, &scope, 1U);
 }
 
 uint16_t Step42_BuildTrackConfig(uint8_t *buf, uint16_t max_len, uint8_t seq,
@@ -551,9 +564,10 @@ uint16_t Step42_BuildTrackAdvanced(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                   float gain_max, float full_error,
                                   uint16_t prediction_ms, uint16_t timeout_ms,
                                   float single_deadband, float outer_deadband,
-                                  float inner_deadband)
+                                  float inner_deadband,
+                                  uint8_t advanced_flags)
 {
-    uint8_t payload[18];
+    uint8_t payload[19];
 
     if ((filter_alpha <= 0.0f) || (filter_alpha > 1.0f) ||
         (gain_min < 0.1f) || (gain_min > 10.0f) ||
@@ -562,7 +576,8 @@ uint16_t Step42_BuildTrackAdvanced(uint8_t *buf, uint16_t max_len, uint8_t seq,
         (prediction_ms > 200U) || (timeout_ms < 20U) || (timeout_ms > 5000U) ||
         (single_deadband < 0.0f) || (single_deadband > 65.535f) ||
         (outer_deadband < 0.0f) || (outer_deadband > 65.535f) ||
-        (inner_deadband < 0.0f) || (inner_deadband > 65.535f))
+        (inner_deadband < 0.0f) || (inner_deadband > 65.535f) ||
+        ((advanced_flags & (uint8_t)~0x07U) != 0U))
     {
         return 0U;
     }
@@ -576,6 +591,7 @@ uint16_t Step42_BuildTrackAdvanced(uint8_t *buf, uint16_t max_len, uint8_t seq,
     Step42_WriteU16(payload, 12U, Step42_FloatToU16Scaled(single_deadband, 1000.0f));
     Step42_WriteU16(payload, 14U, Step42_FloatToU16Scaled(outer_deadband, 1000.0f));
     Step42_WriteU16(payload, 16U, Step42_FloatToU16Scaled(inner_deadband, 1000.0f));
+    payload[18] = advanced_flags;
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_ADVANCED, seq,
                              payload, sizeof(payload));
 }
@@ -585,9 +601,85 @@ uint16_t Step42_BuildTrackDefaults(uint8_t *buf, uint16_t max_len, uint8_t seq)
     return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_DEFAULT, seq, 0, 0U);
 }
 
-uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq)
+uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                                uint8_t source)
 {
-    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_QUERY, seq, 0, 0U);
+    if (source > STEP42_CONFIG_SOURCE_FLASH)
+    {
+        return 0U;
+    }
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_TRACK_QUERY, seq,
+                             &source, 1U);
+}
+
+uint16_t Step42_BuildExternalPositionConfig(uint8_t *buf, uint16_t max_len,
+                                            uint8_t seq, uint16_t microsteps,
+                                            uint16_t acceleration,
+                                            float kp, float ki, float kd,
+                                            uint16_t output_limit,
+                                            float deadband,
+                                            float minimum_deg,
+                                            float maximum_deg,
+                                            uint16_t timeout_ms,
+                                            uint8_t loss_action)
+{
+    uint8_t payload[31];
+
+    if ((microsteps == 0U) || (microsteps > 256U) ||
+        ((microsteps & (uint16_t)(microsteps - 1U)) != 0U) ||
+        (acceleration == 0U) || (kp < 0.0f) || (ki < 0.0f) || (kd < 0.0f) ||
+        (output_limit == 0U) ||
+        (output_limit > Step42_GetPulseSpeedLimit(microsteps)) ||
+        (deadband < 0.0f) || (deadband > 65.535f) ||
+        (minimum_deg < -7200.0f) || (maximum_deg > 7200.0f) ||
+        (minimum_deg >= maximum_deg) ||
+        (timeout_ms < 20U) || (timeout_ms > 5000U) ||
+        (loss_action > STEP42_EXTERNAL_LOSS_DISABLE))
+    {
+        return 0U;
+    }
+
+    Step42_WriteU16(payload, 0U, microsteps);
+    Step42_WriteU16(payload, 2U, acceleration);
+    Step42_WriteI32(payload, 4U, (int32_t)(kp * 100.0f));
+    Step42_WriteI32(payload, 8U, (int32_t)(ki * 100.0f));
+    Step42_WriteI32(payload, 12U, (int32_t)(kd * 100.0f));
+    Step42_WriteU16(payload, 16U, output_limit);
+    Step42_WriteU16(payload, 18U, Step42_FloatToU16Scaled(deadband, 1000.0f));
+    Step42_WriteI32(payload, 20U, (int32_t)(minimum_deg * 100.0f));
+    Step42_WriteI32(payload, 24U, (int32_t)(maximum_deg * 100.0f));
+    Step42_WriteU16(payload, 28U, timeout_ms);
+    payload[30] = loss_action;
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_EXTERNAL_POSITION_CONFIG,
+                             seq, payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildExternalPositionTarget(uint8_t *buf, uint16_t max_len,
+                                            uint8_t seq, float target_deg,
+                                            uint8_t target_valid)
+{
+    uint8_t payload[5];
+
+    if ((target_valid > 1U) || (target_deg < -7200.0f) ||
+        (target_deg > 7200.0f))
+    {
+        return 0U;
+    }
+    payload[0] = target_valid;
+    Step42_WriteI32(payload, 1U, (int32_t)(target_deg * 100.0f));
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_EXTERNAL_POSITION_TARGET,
+                             seq, payload, sizeof(payload));
+}
+
+uint16_t Step42_BuildExternalPositionQuery(uint8_t *buf, uint16_t max_len,
+                                           uint8_t seq, uint8_t source)
+{
+    if (source > STEP42_CONFIG_SOURCE_FLASH)
+    {
+        return 0U;
+    }
+    return Step42_BuildFrame(buf, max_len, STEP42_CMD_EXTERNAL_POSITION_QUERY,
+                             seq, &source, 1U);
 }
 
 uint16_t Step42_BuildSetChopperMode(uint8_t *buf, uint16_t max_len,

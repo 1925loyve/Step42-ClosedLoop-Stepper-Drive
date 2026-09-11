@@ -35,6 +35,7 @@ extern Stepper_t Motor_42;
 #define STEP42_PROGRAM_STATE_MICROSTEP (0x02U)
 #define STEP42_PROGRAM_STATE_CHOPPER   (0x04U)
 #define STEP42_PROGRAM_STATE_PROFILE   (0x08U)
+#define STEP42_PROGRAM_STATE_CURRENT   (0x10U)
 
 #define STEP42_PROGRAM_CONDITION_NONE         (0U)
 #define STEP42_PROGRAM_CONDITION_SIGNAL_TRUE  (1U)
@@ -59,8 +60,18 @@ typedef struct
   int32_t value;
 } Step42ProgramStep_t;
 
-/* External continuous position targets are relative to this saved software
-   center. It makes the feature independent of each MT6701's raw angle. */
+#define STEP42_EXTERNAL_LOSS_HOLD    (0U)
+#define STEP42_EXTERNAL_LOSS_ZERO    (1U)
+#define STEP42_EXTERNAL_LOSS_DISABLE (2U)
+
+#define STEP42_CONFIG_SAVE_ALL       (0U)
+#define STEP42_CONFIG_SAVE_GLOBAL    (1U)
+#define STEP42_CONFIG_SAVE_TRACKING  (2U)
+#define STEP42_CONFIG_SAVE_EXTERNAL  (3U)
+#define STEP42_CONFIG_SAVE_HOME      (4U)
+#define STEP42_CONFIG_SAVE_NODE_ID   (5U)
+
+/* External continuous-position targets use the board's global software zero. */
 typedef struct
 {
   uint16_t microsteps;
@@ -73,8 +84,8 @@ typedef struct
   float minimum_deg;
   float maximum_deg;
   uint16_t timeout_ms;
-  float center_raw_deg;
-  uint8_t center_valid;
+  uint8_t loss_action;
+  uint8_t reserved;
 } Step42ExternalPositionConfig_t;
 
 void Step42Control_Init(void);
@@ -97,7 +108,7 @@ uint8_t Step42Control_GetHoldCurrent(void);
 uint8_t Step42Control_GetRunCurrent(void);
 void Step42Control_SetPositionPID(float kp, float ki, float kd, float output_limit, float deadband);
 void Step42Control_GetPositionPID(float *kp, float *ki, float *kd, float *output_limit, float *deadband);
-uint8_t Step42Control_SaveRuntimeConfig(void);
+uint8_t Step42Control_SaveRuntimeConfig(uint8_t scope);
 uint8_t Step42Control_SetCanNodeId(uint8_t node_id);
 uint8_t Step42Control_GetCanNodeId(void);
 uint8_t Step42Control_SetHomeMode(uint8_t mode);
@@ -130,7 +141,8 @@ uint8_t Step42Control_SetTrackingAdvanced(float filter_alpha,
                                           uint16_t timeout_ms,
                                           float single_deadband,
                                           float outer_deadband,
-                                          float inner_deadband);
+                                          float inner_deadband,
+                                          uint8_t advanced_flags);
 void Step42Control_SetTrackingInput(float primary_error, float secondary_feedback);
 void Step42Control_SetProgramSignals(uint8_t target_detected,
                                      uint8_t custom1,
@@ -138,13 +150,19 @@ void Step42Control_SetProgramSignals(uint8_t target_detected,
 void Step42Control_SetTrackingDirection(uint8_t reverse);
 uint8_t Step42Control_GetTrackingDirection(void);
 uint8_t Step42Control_IsTrackingConfigPersisted(void);
+const Step42TrackingConfig_t *Step42Control_GetFlashTrackingConfig(void);
+uint8_t Step42Control_GetFlashTrackingDirection(void);
 void Step42Control_ResetTrackingDefaults(void);
 uint8_t Step42Control_SetExternalPositionConfig(const Step42ExternalPositionConfig_t *config);
 const Step42ExternalPositionConfig_t *Step42Control_GetExternalPositionConfig(void);
+const Step42ExternalPositionConfig_t *Step42Control_GetFlashExternalPositionConfig(void);
+uint8_t Step42Control_IsExternalPositionConfigPersisted(void);
 uint8_t Step42Control_SetExternalPositionCenter(void);
 uint8_t Step42Control_SetExternalPositionTarget(float target_deg);
+uint8_t Step42Control_SetExternalPositionTargetValid(float target_deg, uint8_t valid);
 float Step42Control_GetExternalPositionTargetDeg(void);
 float Step42Control_GetExternalPositionCurrentDeg(void);
+uint8_t Step42Control_IsExternalPositionTargetValid(void);
 void Step42Control_SetThermalLockout(uint8_t lockout);
 
 uint8_t Step42Control_IsUserEnabled(void);

@@ -54,6 +54,29 @@ int Step42_STM32HAL_SetSignals(Step42_STM32HAL_Handle *handle,
                                uint8_t custom2,
                                int16_t primary_error,
                                int16_t secondary_feedback);
+int Step42_STM32HAL_SetExternalPositionConfig(
+    Step42_STM32HAL_Handle *handle,
+    uint16_t microsteps,
+    uint16_t acceleration,
+    float kp,
+    float ki,
+    float kd,
+    uint16_t output_limit,
+    float deadband,
+    float minimum_deg,
+    float maximum_deg,
+    uint16_t timeout_ms,
+    uint8_t loss_action);
+int Step42_STM32HAL_SetExternalPositionTarget(Step42_STM32HAL_Handle *handle,
+                                              float target_deg,
+                                              uint8_t target_valid);
+int Step42_STM32HAL_QueryTracking(Step42_STM32HAL_Handle *handle,
+                                  uint8_t source);
+int Step42_STM32HAL_QueryExternalPosition(Step42_STM32HAL_Handle *handle,
+                                          uint8_t source);
+int Step42_STM32HAL_SaveRuntimeConfig(Step42_STM32HAL_Handle *handle);
+int Step42_STM32HAL_SaveRuntimeConfigScope(Step42_STM32HAL_Handle *handle,
+                                           uint8_t scope);
 int Step42_STM32HAL_SetStream(Step42_STM32HAL_Handle *handle, uint8_t enable);
 int Step42_STM32HAL_Query(Step42_STM32HAL_Handle *handle);
 int Step42_STM32HAL_Stop(Step42_STM32HAL_Handle *handle);

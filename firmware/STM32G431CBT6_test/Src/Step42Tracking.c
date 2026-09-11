@@ -5,7 +5,7 @@
 #define TRACK_DEFAULT_SPEED_PERCENT (100U)
 #define TRACK_DEFAULT_ACCEL_PERCENT (100U)
 #define TRACK_DEFAULT_FREQUENCY_KHZ (1U)
-#define TRACK_MAX_SPEED_PPS (10000.0f)
+#define TRACK_MAX_SPEED_PPS (15000.0f)
 #define TRACK_MAX_ACCEL_PPS2 (30000.0f)
 
 static Step42TrackingConfig_t config;
@@ -79,6 +79,10 @@ void Step42Tracking_ResetDefaults(void)
     config.speed_percent = TRACK_DEFAULT_SPEED_PERCENT;
     config.accel_percent = TRACK_DEFAULT_ACCEL_PERCENT;
     config.frequency_khz = TRACK_DEFAULT_FREQUENCY_KHZ;
+    config.advanced_flags = 0U;
+    config.reserved[0] = 0U;
+    config.reserved[1] = 0U;
+    config.reserved[2] = 0U;
 
     config.single.kp = 180.0f;
     config.single.ki = 0.2f;
@@ -178,7 +182,8 @@ uint8_t Step42Tracking_SetAdvanced(float filter_alpha,
                                    uint16_t timeout_ms,
                                    float single_deadband,
                                    float outer_deadband,
-                                   float inner_deadband)
+                                   float inner_deadband,
+                                   uint8_t advanced_flags)
 {
     if ((filter_alpha <= 0.0f) || (filter_alpha > 1.0f) ||
         (gain_min < 0.1f) || (gain_min > 10.0f) ||
@@ -188,7 +193,8 @@ uint8_t Step42Tracking_SetAdvanced(float filter_alpha,
         (timeout_ms < 20U) || (timeout_ms > 5000U) ||
         (single_deadband < 0.0f) || (single_deadband > 65.535f) ||
         (outer_deadband < 0.0f) || (outer_deadband > 65.535f) ||
-        (inner_deadband < 0.0f) || (inner_deadband > 65.535f))
+        (inner_deadband < 0.0f) || (inner_deadband > 65.535f) ||
+        ((advanced_flags & (uint8_t)~STEP42_TRACK_ADV_ALL) != 0U))
     {
         return 0U;
     }
@@ -202,6 +208,7 @@ uint8_t Step42Tracking_SetAdvanced(float filter_alpha,
     config.single.deadband = single_deadband;
     config.outer.deadband = outer_deadband;
     config.inner.deadband = inner_deadband;
+    config.advanced_flags = advanced_flags;
     SyncPids(1.0f / ((float)config.frequency_khz * 1000.0f));
     return 1U;
 }
@@ -238,7 +245,14 @@ uint8_t Step42Tracking_Update(float dt, float *speed_output)
         return 1U;
     }
 
-    if (filter_valid == 0U)
+    if ((config.advanced_flags & STEP42_TRACK_ADV_FILTER) == 0U)
+    {
+        previous_filtered_error = (filter_valid != 0U) ?
+                                  filtered_error : raw_primary_error;
+        filtered_error = raw_primary_error;
+        filter_valid = 1U;
+    }
+    else if (filter_valid == 0U)
     {
         filtered_error = raw_primary_error;
         previous_filtered_error = filtered_error;
@@ -251,10 +265,18 @@ uint8_t Step42Tracking_Update(float dt, float *speed_output)
     }
 
     derivative = (dt > 0.0f) ? ((filtered_error - previous_filtered_error) / dt) : 0.0f;
-    predicted_error = filtered_error + derivative * config.prediction_ms * 0.001f;
-    gain_ratio = ClampF(AbsF(predicted_error) / config.dynamic_full_error, 0.0f, 1.0f);
-    gain = config.dynamic_gain_min +
-           (config.dynamic_gain_max - config.dynamic_gain_min) * gain_ratio;
+    predicted_error = filtered_error;
+    if ((config.advanced_flags & STEP42_TRACK_ADV_PREDICTION) != 0U)
+    {
+        predicted_error += derivative * config.prediction_ms * 0.001f;
+    }
+    gain = 1.0f;
+    if ((config.advanced_flags & STEP42_TRACK_ADV_GAIN) != 0U)
+    {
+        gain_ratio = ClampF(AbsF(predicted_error) / config.dynamic_full_error, 0.0f, 1.0f);
+        gain = config.dynamic_gain_min +
+               (config.dynamic_gain_max - config.dynamic_gain_min) * gain_ratio;
+    }
 
     single_pid.dt = dt;
     outer_pid.dt = dt;

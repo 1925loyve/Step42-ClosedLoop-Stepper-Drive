@@ -11,6 +11,11 @@
 #define STEP42_TRACK_LOOP_OUTER (1U)
 #define STEP42_TRACK_LOOP_INNER (2U)
 
+#define STEP42_TRACK_ADV_FILTER     (0x01U)
+#define STEP42_TRACK_ADV_PREDICTION (0x02U)
+#define STEP42_TRACK_ADV_GAIN       (0x04U)
+#define STEP42_TRACK_ADV_ALL        (0x07U)
+
 typedef struct
 {
     float kp;
@@ -26,6 +31,8 @@ typedef struct
     uint8_t speed_percent;
     uint8_t accel_percent;
     uint8_t frequency_khz;
+    uint8_t advanced_flags;
+    uint8_t reserved[3];
     Step42TrackingPidConfig_t single;
     Step42TrackingPidConfig_t outer;
     Step42TrackingPidConfig_t inner;
@@ -55,7 +62,8 @@ uint8_t Step42Tracking_SetAdvanced(float filter_alpha,
                                    uint16_t timeout_ms,
                                    float single_deadband,
                                    float outer_deadband,
-                                   float inner_deadband);
+                                   float inner_deadband,
+                                   uint8_t advanced_flags);
 void Step42Tracking_SetInput(float primary_error, float secondary_feedback);
 uint8_t Step42Tracking_Update(float dt, float *speed_output);
 void Step42Tracking_Stop(void);

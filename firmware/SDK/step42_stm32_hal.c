@@ -180,6 +180,107 @@ int Step42_STM32HAL_SetSignals(Step42_STM32HAL_Handle *handle,
     return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
 }
 
+int Step42_STM32HAL_SetExternalPositionConfig(
+    Step42_STM32HAL_Handle *handle,
+    uint16_t microsteps,
+    uint16_t acceleration,
+    float kp,
+    float ki,
+    float kd,
+    uint16_t output_limit,
+    float deadband,
+    float minimum_deg,
+    float maximum_deg,
+    uint16_t timeout_ms,
+    uint8_t loss_action)
+{
+    uint8_t tx[STEP42_MAX_FRAME_SIZE];
+    uint16_t len;
+
+    if (handle == 0)
+    {
+        return STEP42_HAL_BAD_PARAM;
+    }
+    len = Step42_BuildExternalPositionConfig(
+        tx, sizeof(tx), ++handle->seq, microsteps, acceleration,
+        kp, ki, kd, output_limit, deadband, minimum_deg, maximum_deg,
+        timeout_ms, loss_action);
+    return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
+}
+
+int Step42_STM32HAL_SetExternalPositionTarget(Step42_STM32HAL_Handle *handle,
+                                              float target_deg,
+                                              uint8_t target_valid)
+{
+    uint8_t tx[STEP42_MAX_FRAME_SIZE];
+    uint16_t len;
+
+    if (handle == 0)
+    {
+        return STEP42_HAL_BAD_PARAM;
+    }
+    len = Step42_BuildExternalPositionTarget(
+        tx, sizeof(tx), ++handle->seq, target_deg, target_valid);
+    return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
+}
+
+int Step42_STM32HAL_QueryTracking(Step42_STM32HAL_Handle *handle,
+                                  uint8_t source)
+{
+    uint8_t tx[STEP42_MAX_FRAME_SIZE];
+    uint16_t len;
+
+    if (handle == 0)
+    {
+        return STEP42_HAL_BAD_PARAM;
+    }
+    len = Step42_BuildTrackQuery(tx, sizeof(tx), ++handle->seq, source);
+    return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
+}
+
+int Step42_STM32HAL_QueryExternalPosition(Step42_STM32HAL_Handle *handle,
+                                          uint8_t source)
+{
+    uint8_t tx[STEP42_MAX_FRAME_SIZE];
+    uint16_t len;
+
+    if (handle == 0)
+    {
+        return STEP42_HAL_BAD_PARAM;
+    }
+    len = Step42_BuildExternalPositionQuery(
+        tx, sizeof(tx), ++handle->seq, source);
+    return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
+}
+
+int Step42_STM32HAL_SaveRuntimeConfig(Step42_STM32HAL_Handle *handle)
+{
+    uint8_t tx[STEP42_MAX_FRAME_SIZE];
+    uint16_t len;
+
+    if (handle == 0)
+    {
+        return STEP42_HAL_BAD_PARAM;
+    }
+    len = Step42_BuildSaveRuntimeConfig(tx, sizeof(tx), ++handle->seq);
+    return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
+}
+
+int Step42_STM32HAL_SaveRuntimeConfigScope(Step42_STM32HAL_Handle *handle,
+                                           uint8_t scope)
+{
+    uint8_t tx[STEP42_MAX_FRAME_SIZE];
+    uint16_t len;
+
+    if (handle == 0)
+    {
+        return STEP42_HAL_BAD_PARAM;
+    }
+    len = Step42_BuildSaveRuntimeConfigScope(
+        tx, sizeof(tx), ++handle->seq, scope);
+    return Step42_STM32HAL_SendBuiltFrame(handle, tx, len);
+}
+
 int Step42_STM32HAL_SetStream(Step42_STM32HAL_Handle *handle, uint8_t enable)
 {
     uint8_t tx[STEP42_MAX_FRAME_SIZE];

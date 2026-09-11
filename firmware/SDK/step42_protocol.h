@@ -48,6 +48,9 @@ extern "C" {
 #define STEP42_CMD_TRACK_DIRECTION  (0x1FU)
 #define STEP42_CMD_SAVE_RUNTIME_CONFIG (0x20U)
 #define STEP42_CMD_CAN_NODE_ID      (0x21U)
+#define STEP42_CMD_EXTERNAL_POSITION_CONFIG (0x22U)
+#define STEP42_CMD_EXTERNAL_POSITION_TARGET (0x23U)
+#define STEP42_CMD_EXTERNAL_POSITION_QUERY  (0x24U)
 #define STEP42_CMD_CURRENT          (0x26U)
 #define STEP42_CMD_SIGNAL_INPUT     (0x27U)
 
@@ -69,6 +72,26 @@ extern "C" {
 #define STEP42_PROGRAM_OP_GOTO         (0x0DU)
 #define STEP42_PROGRAM_OP_BRANCH       (0x0EU)
 #define STEP42_PROGRAM_SPEED_FLAG_RPM  (0x01U)
+#define STEP42_PROGRAM_STATE_MODE      (0x01U)
+#define STEP42_PROGRAM_STATE_MICROSTEP (0x02U)
+#define STEP42_PROGRAM_STATE_CHOPPER   (0x04U)
+#define STEP42_PROGRAM_STATE_PROFILE   (0x08U)
+#define STEP42_PROGRAM_STATE_CURRENT   (0x10U)
+
+#define STEP42_TRACK_ADV_FILTER        (0x01U)
+#define STEP42_TRACK_ADV_PREDICTION    (0x02U)
+#define STEP42_TRACK_ADV_GAIN          (0x04U)
+
+#define STEP42_CONFIG_SOURCE_RAM       (0x00U)
+#define STEP42_CONFIG_SOURCE_FLASH     (0x01U)
+#define STEP42_CONFIG_SAVE_ALL         (0x00U)
+#define STEP42_CONFIG_SAVE_GLOBAL      (0x01U)
+#define STEP42_CONFIG_SAVE_TRACKING    (0x02U)
+#define STEP42_CONFIG_SAVE_EXTERNAL    (0x03U)
+
+#define STEP42_EXTERNAL_LOSS_HOLD      (0x00U)
+#define STEP42_EXTERNAL_LOSS_ZERO      (0x01U)
+#define STEP42_EXTERNAL_LOSS_DISABLE   (0x02U)
 
 #define STEP42_STATUS_OK            (0x00U)
 #define STEP42_STATUS_BAD_LEN       (0x01U)
@@ -83,6 +106,7 @@ extern "C" {
 #define STEP42_MODE_CLOSED_POSITION (0x01U)
 #define STEP42_MODE_OPEN_SPEED      (0x02U)
 #define STEP42_MODE_TRACK_PID       (0x03U)
+#define STEP42_MODE_EXTERNAL_POSITION (0x04U)
 
 #define STEP42_BOARD_FACTORY_DEBUG  (0x00U)
 #define STEP42_BOARD_PWM            (0x01U)
@@ -233,6 +257,8 @@ uint16_t Step42_BuildQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildSetMode(uint8_t *buf, uint16_t max_len, uint8_t seq, uint8_t mode);
 uint16_t Step42_BuildStop(uint8_t *buf, uint16_t max_len, uint8_t seq);
 uint16_t Step42_BuildSaveRuntimeConfig(uint8_t *buf, uint16_t max_len, uint8_t seq);
+uint16_t Step42_BuildSaveRuntimeConfigScope(uint8_t *buf, uint16_t max_len,
+                                            uint8_t seq, uint8_t scope);
 uint16_t Step42_BuildTrackConfig(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                 uint8_t mode, uint8_t speed_percent,
                                 uint8_t accel_percent, uint8_t frequency_khz);
@@ -243,13 +269,30 @@ uint16_t Step42_BuildTrackAdvanced(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                   float gain_max, float full_error,
                                   uint16_t prediction_ms, uint16_t timeout_ms,
                                   float single_deadband, float outer_deadband,
-                                  float inner_deadband);
+                                  float inner_deadband,
+                                  uint8_t advanced_flags);
 uint16_t Step42_BuildSignalInput(uint8_t *buf, uint16_t max_len, uint8_t seq,
                                 uint8_t target_detected, uint8_t custom1,
                                 uint8_t custom2, int16_t primary_error,
                                 int16_t secondary_feedback);
 uint16_t Step42_BuildTrackDefaults(uint8_t *buf, uint16_t max_len, uint8_t seq);
-uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq);
+uint16_t Step42_BuildTrackQuery(uint8_t *buf, uint16_t max_len, uint8_t seq,
+                                uint8_t source);
+uint16_t Step42_BuildExternalPositionConfig(uint8_t *buf, uint16_t max_len,
+                                            uint8_t seq, uint16_t microsteps,
+                                            uint16_t acceleration,
+                                            float kp, float ki, float kd,
+                                            uint16_t output_limit,
+                                            float deadband,
+                                            float minimum_deg,
+                                            float maximum_deg,
+                                            uint16_t timeout_ms,
+                                            uint8_t loss_action);
+uint16_t Step42_BuildExternalPositionTarget(uint8_t *buf, uint16_t max_len,
+                                            uint8_t seq, float target_deg,
+                                            uint8_t target_valid);
+uint16_t Step42_BuildExternalPositionQuery(uint8_t *buf, uint16_t max_len,
+                                           uint8_t seq, uint8_t source);
 uint16_t Step42_BuildSetChopperMode(uint8_t *buf, uint16_t max_len,
                                    uint8_t seq, uint8_t mode);
 uint16_t Step42_BuildSetMotionProfile(uint8_t *buf, uint16_t max_len,

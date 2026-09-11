@@ -124,6 +124,7 @@ STEP42_MODE_OPEN_POSITION    fixed open-loop step move to angle
 STEP42_MODE_CLOSED_POSITION  encoder PID position control
 STEP42_MODE_OPEN_SPEED       open-loop continuous speed
 STEP42_MODE_TRACK_PID        external-error tracking PID, fixed 32 microsteps
+STEP42_MODE_EXTERNAL_POSITION external continuous-position target with independent tuning
 ```
 
 Set the mode first, then send angle or speed:
@@ -165,6 +166,12 @@ uart_send(tx, len);
 len = Step42_BuildTrackPid(tx, sizeof(tx), ++seq, 0, 180.0f, 0.2f, 0.0f);
 uart_send(tx, len);
 
+/* Advanced algorithms are explicitly opt-in. This example enables filtering only. */
+len = Step42_BuildTrackAdvanced(
+    tx, sizeof(tx), ++seq, 0.25f, 1.0f, 1.0f, 10.0f,
+    0, 250, 0.08f, 0.08f, 0.08f, STEP42_TRACK_ADV_FILTER);
+uart_send(tx, len);
+
 /* Send this once per sensor/camera sample. Values are raw signed integers. */
 len = Step42_BuildSignalInput(tx, sizeof(tx), ++seq,
                               target_detected, custom_signal_1,
@@ -188,6 +195,34 @@ UART and CAN carry the same binary command payload.
 The UART data stream is disabled after reset. Send `Step42_BuildSetStream()`
 only when continuous status telemetry is needed.
 
+## External Continuous Position
+
+This mode is intended for a camera or another MCU that calculates a continuous
+position target every frame. It shares the board's single global zero, but has
+independent microsteps, PID, speed limit, soft range, timeout and target-loss
+behavior. Set the global zero once before entering this mode.
+
+```c
+Step42_STM32HAL_SetMode(&motor, STEP42_MODE_EXTERNAL_POSITION);
+
+Step42_STM32HAL_SetExternalPositionConfig(
+    &motor, 32, 3000, 180.0f, 0.2f, 0.0f, 5000, 0.08f,
+    -80.0f, 80.0f, 200, STEP42_EXTERNAL_LOSS_HOLD);
+
+/* Call once per external-controller sample. */
+Step42_STM32HAL_SetExternalPositionTarget(&motor, target_deg, target_valid);
+```
+
+If `target_valid` becomes zero or frames stop for `timeout_ms`, the selected
+loss action holds the current position, returns to global zero, or disables the
+motor. Runtime tuning changes RAM. Read either copy with
+`Step42_STM32HAL_QueryExternalPosition(..., STEP42_CONFIG_SOURCE_RAM/FLASH)`;
+call `Step42_STM32HAL_SaveRuntimeConfigScope(&motor, STEP42_CONFIG_SAVE_EXTERNAL)`
+to persist only this page. Use `STEP42_CONFIG_SAVE_TRACKING` for the internal
+tracking page, or the legacy `Step42_STM32HAL_SaveRuntimeConfig()` to persist
+all persistent settings at once. Every Flash save is explicitly rate-limited by
+the firmware.
+
 Chopper mode can be selected without changing the current-reference source:
 
 ```c
@@ -210,7 +245,10 @@ uart_send(tx, len);
 Step42_STM32HAL_SetCurrent(&motor, 4, 12);
 ```
 
-Protocol version 19 makes signal input `0x27` the only PID/vision input and
+Protocol version 20 adds explicit advanced-feature enable bits, separate RAM
+and Flash queries for tracking/external-position configuration, and the shared
+global-zero external continuous-position mode. Protocol version 19 makes
+signal input `0x27` the only PID/vision input and
 uses two raw signed 16-bit errors. Legacy command `0x13` and newline-delimited
 ASCII input are removed. Protocol version 18 appended the original signal
 input and expanded offline programs to 32 steps with drive-state,

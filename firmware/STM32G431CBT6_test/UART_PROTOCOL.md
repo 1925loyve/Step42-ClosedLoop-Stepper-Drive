@@ -86,6 +86,10 @@ Status byte:
 0x01 bad length
 0x02 value out of range
 0x03 unknown command
+0x04 wrong motion mode
+0x05 busy
+0x06 interface denied
+0x07 device/TMC2209 error
 ```
 
 ## Commands
@@ -96,21 +100,39 @@ Status byte:
 | `0x02` | Enable | `u8 enable` | `status` |
 | `0x03` | Multi-turn absolute angle | `i32 angle_cdeg`, range `-720000~720000` | `status` |
 | `0x04` | Open-loop speed | `i16 speed, u16 accel` | `status` |
-| `0x05` | PID | `i16 kp_x100, i16 ki_x100, i16 kd_x100, u16 limit, u16 dead_x1000` | `status` |
+| `0x05` | Closed-position PID | `i32 kp_x100, i32 ki_x100, i32 kd_x100, u16 limit, u16 dead_x1000` | `status` |
 | `0x06` | Stream | `u8 enable` | `status`; when enabled, `SEQ=0` telemetry is sent periodically |
 | `0x07` | Query | none | complete current configuration and status, including response interface |
 | `0x08` | Mode | `u8 mode` | `status` |
 | `0x09` | Stop | none | `status` |
+| `0x0A` | Open-loop step move | `i32 steps, u16 speed, u16 accel` | `status` |
+| `0x0B` | Microsteps | `u16 microsteps` | `status` |
+| `0x0C` | Closed-position acceleration | `u16 accel` | `status` |
+| `0x0D` | Home mode | `u8 mode` | `status` |
+| `0x0E` | Set current position as global zero | none | `status`; persists zero to Flash |
+| `0x0F` | Home | `u8 mode` | `status` |
+| `0x10` | Tracking limits | `u8 structure, u8 speed_percent, u8 accel_percent, u8 frequency_khz` | `status` |
+| `0x11` | Tracking loop PID | `u8 loop, i32 kp_x100, i32 ki_x100, i32 kd_x100` | `status` |
+| `0x12` | Tracking advanced | nine `u16` values followed by `u8 advanced_flags` | `status`; flags bit0 filter, bit1 prediction, bit2 dynamic gain |
+| `0x14` | Restore tracking defaults in RAM | none | `status` |
+| `0x15` | Read tracking config | `u8 source`: `0=RAM`, `1=Flash` | 63-byte tracking response |
+| `0x16` | Chopper mode | `u8 mode`: `0=StealthChop`, `1=SpreadCycle` | `status` |
 | `0x27` | Signals and PID input | `u8 flags, i16 error1, i16 error2` | `status` |
 | `0x17` | Relative closed-loop angle | `i32 delta_cdeg`, range `-720000~720000`; resulting target must remain within `-7200°~7200°` | `status` |
 | `0x18` | Program mode | `u8 enable` | `status`; accepted by Error and Debug UART |
 | `0x19` | Program step | `u8 index, u8 op, u8 flags, u16 speed, u16 accel, u16 duration_ms, i32 value` | `status`; accepted by Error and Debug UART |
-| `0x1A` | Save program | `u8 count`, maximum 8 | `status`; commits staged steps to Flash through either UART |
+| `0x1A` | Save program | `u8 count`, maximum 32 | `status`; commits staged steps to Flash through either UART |
 | `0x1B` | Run program | none | `status`; requires program mode and motor enabled |
 | `0x1C` | Program query | none | `status, program_mode, program_running, program_count` |
-| `0x1D` | Stage program in RAM | `u8 count`, maximum 8 | `status`; makes uploaded steps runnable without a Flash erase |
-| `0x20` | Save persistent configuration | none | `status`; saves zero point, home mode, and all tracking PID settings to Flash. Closed-position PID/acceleration stay session-only. |
+| `0x1D` | Stage program in RAM | `u8 count`, maximum 32 | `status`; makes uploaded steps runnable without a Flash erase |
+| `0x1E` | Motion profile | `u8 profile`: `0=trapezoid`, `1=S-curve` | `status` |
+| `0x1F` | Tracking direction | `u8 reverse` | `status` |
+| `0x20` | Save persistent configuration | none for all settings, or `u8 scope`: `1=global zero`, `2=tracking PID`, `3=external continuous position` | `status`; normal writes stay in RAM and Flash writes are guarded against rapid repetition. |
 | `0x21` | Set CAN Node ID | `u8 node_id`, range `1~31` | `status`; immediately saves the Node ID to Flash |
+| `0x22` | External continuous-position config | `u16 microsteps, u16 accel, i32 kp_x100, i32 ki_x100, i32 kd_x100, u16 output_limit, u16 dead_x1000, i32 min_cdeg, i32 max_cdeg, u16 timeout_ms, u8 loss_action` | `status` |
+| `0x23` | External continuous-position target | `u8 target_valid, i32 target_cdeg` | `status` |
+| `0x24` | Read external continuous-position config | `u8 source`: `0=RAM`, `1=Flash` | 44-byte external-position response |
+| `0x26` | TMC2209 current | `u8 hold_current, u8 run_current`, range `0..31`/`1..31` and hold <= run | `status` |
 
 Control modes:
 
@@ -119,7 +141,20 @@ Control modes:
 0x01 closed-loop position
 0x02 open-loop speed
 0x03 built-in error PID tracking
+0x04 external continuous closed position
 ```
+
+Protocol v20 makes the two specialist control pages explicit. Tracking query
+responses now contain `source` at byte 61 and `advanced_flags` at byte 62.
+The advanced algorithms are bypassed unless their corresponding flag is set.
+External-position configuration uses the same global zero as all other position
+modes, has its own microsteps/PID/range/timeout values, and stores a target-loss
+action (`0=hold`, `1=return global zero`, `2=disable`). Its query response reports
+the source, persistence state, loss action, target-valid state and global-zero
+state in bytes 39..43. Normal writes change RAM; `0x20` is the explicit shared
+Flash commit. Its optional scope byte lets the GUI persist one page without
+overwriting another page's unsaved RAM values; no payload keeps the legacy
+"save all" behavior. Every Flash commit is guarded against rapid repeated writes.
 
 Protocol v6 appends `response_interface` to the Query response: `0=Error/USART2`,
 `1=Debug/USART3`, `2=CAN`. The upper computer uses it to choose its waveform
